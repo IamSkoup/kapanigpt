@@ -5,7 +5,7 @@ import { createUserWithEmailAndPassword, getIdToken, onAuthStateChanged, signInW
 import { collection, deleteDoc, doc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc, updateDoc, writeBatch } from "firebase/firestore";
 import { ArrowUp, AudioLines, Check, ChevronDown, ChevronRight, CircleHelp, Clipboard, Code2, Download, FileCode2, FileText, Menu, MessageCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, WandSparkles, X, Crown, LockKeyhole, BrainCircuit, Wallet, LogIn, LoaderCircle, Zap, Gift } from "lucide-react";
 import { auth, database } from "@/lib/firebase";
-import { MODEL_CHOICES, PLANS, REASONING, TOKEN_PACKS, SUPABASE_PUBLIC_KEY, SUPABASE_URL, kapaniEmail, type ChatMode, type Plan, type Reasoning, type TokenPack } from "@/lib/kapani";
+import { MODEL_CHOICES, PLANS, REASONING, TOKEN_PACKS, type ChatMode, type Plan, type Reasoning, type TokenPack } from "@/lib/kapani";
 import { DEFAULT_PREFERENCES, type UserPreferences } from "@/lib/preferences-config";
 import { type GeneratedFile } from "@/lib/response-files";
 
@@ -202,17 +202,16 @@ export default function Home() {
     if (!loginNick.trim() || !loginPassword) { setShopError("Введи ник и пароль от «Капани»."); return; }
     setLoggingIn(true); setShopError("");
     try {
-      const email = loginNick.trim().includes("@") ? loginNick.trim().toLowerCase() : await kapaniEmail(loginNick.trim());
-      const response = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, { method: "POST", headers: { apikey: SUPABASE_PUBLIC_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ email, password: loginPassword }) });
-      const data = await response.json() as { access_token?: string; refresh_token?: string; expires_in?: number; msg?: string; error_description?: string };
-      if (!response.ok || !data.access_token || !data.refresh_token) throw new Error(data.error_description || "Неверный ник или пароль Капани.");
-      const statusResponse = await fetch("/api/kapani/status", { method: "POST",
-        headers: { ...await authorizationHeaders(), "x-kapani-token": data.access_token }, cache: "no-store" });
-      const status = await statusResponse.json() as KapaniBank & { error?: string };
-      if (!statusResponse.ok) throw new Error(status.error || "Не удалось проверить счёт Капаней.");
-      setKapaniBank({ nickname: status.nickname, balance: status.balance });
+      // All bank requests go through our same-origin server. Direct browser
+      // access to *.supabase.co can fail in regions where Cloudflare is blocked.
+      const response = await fetch("/api/kapani/login", { method: "POST", cache: "no-store",
+        headers: { "Content-Type": "application/json", ...await authorizationHeaders() },
+        body: JSON.stringify({ login: loginNick.trim(), password: loginPassword }) });
+      const data = await response.json() as KapaniBank & { accessToken?: string; expiresIn?: number; error?: string };
+      if (!response.ok || !data.accessToken) throw new Error(data.error || "Не удалось войти в банк Капаней.");
+      setKapaniBank({ nickname: data.nickname, balance: data.balance });
       // The wallet token lives only in memory while the checkout is open.
-      setKapaniSession({ accessToken: data.access_token, expiresAt: Date.now() + (data.expires_in || 3600) * 1000 });
+      setKapaniSession({ accessToken: data.accessToken, expiresAt: Date.now() + (data.expiresIn || 3600) * 1000 });
       setLoginPassword("");
     } catch (e) { setShopError(e instanceof Error ? e.message : "Не удалось войти."); }
     finally { setLoggingIn(false); }
