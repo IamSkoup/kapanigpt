@@ -1,13 +1,16 @@
-import { env } from "cloudflare:workers";
-import { drizzle } from "drizzle-orm/d1";
+import { getConnectionString } from "@netlify/database";
+import { drizzle } from "drizzle-orm/node-postgres";
+import pg from "pg";
 import * as schema from "./schema";
 
-export function getDb() {
-  if (!env.DB) {
-    throw new Error(
-      "Cloudflare D1 binding `DB` is unavailable. Set the `d1` field in .openai/hosting.json to `DB` or let your control plane inject the real binding values before using the database."
-    );
-  }
+let database: ReturnType<typeof drizzle<typeof schema>> | undefined;
 
-  return drizzle(env.DB, { schema });
+export function getDb() {
+  if (!database) {
+    const connectionString = process.env.DATABASE_URL || getConnectionString();
+    if (!connectionString) throw new Error("База данных KapaniGPT пока не подключена.");
+    const pool = new pg.Pool({ connectionString, max: 4, idleTimeoutMillis: 15000 });
+    database = drizzle(pool, { schema });
+  }
+  return database;
 }

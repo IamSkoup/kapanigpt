@@ -27,10 +27,7 @@
         "./*"
       ]
     },
-    "types": [
-      "node",
-      "@cloudflare/workers-types"
-    ]
+    "types": ["node"]
   },
   "include": [
     "next-env.d.ts",
@@ -48,6 +45,7 @@
     ".wrangler",
     ".sites-runtime",
     "outputs",
-    "work"
+    "work",
+    "worker"
   ]
 }

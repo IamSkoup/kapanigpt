@@ -1,11 +1,10 @@
-import { env } from "cloudflare:workers";
 import { getDb } from "@/db";
 import { subscriptionCheckouts, subscriptions, tokenCheckouts } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { PLANS, kapaniRpc, verifiedKapaniBank, type Plan } from "@/lib/kapani";
 import { getFirebaseUserId } from "@/lib/usage";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const PAYMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -24,8 +23,6 @@ export async function POST(request: Request) {
     const token = request.headers.get("x-kapani-token") || "";
     const bank = await verifiedKapaniBank(token);
     const db = getDb();
-    const d1 = env.DB;
-    if (!d1) throw new Error("Хранилище подписок KapaniGPT временно недоступно.");
     const [tokenPurchase] = await db.select({ paymentId: tokenCheckouts.paymentId }).from(tokenCheckouts)
       .where(eq(tokenCheckouts.paymentId, paymentId)).limit(1);
     if (tokenPurchase) throw new Error("Этот номер уже относится к покупке токенов, повторное списание недопустимо.");
@@ -73,25 +70,24 @@ export async function POST(request: Request) {
       throw new Error("Банк Капаней не подтвердил платёж. Повтори его с тем же номером.");
 
     const dbNow = Date.now();
-    // D1 batch is transactional: simultaneous retries can credit the Firebase
-    // entitlement only once. An interrupted request retains the pending UUID;
-    // retries call the idempotent Supabase RPC and finish this grant safely.
-    await d1.batch([
-      d1.prepare("INSERT OR IGNORE INTO ai_subscriptions (user_id, plan, expires_at, updated_at) VALUES (?, 'free', 0, 0)").bind(userId),
-      d1.prepare(`UPDATE ai_subscriptions
-        SET plan = ?,
-            expires_at = CASE WHEN plan = ? AND expires_at > ? THEN expires_at + ? ELSE ? + ? END,
-            updated_at = ?
-        WHERE user_id = ? AND EXISTS (
-          SELECT 1 FROM ai_subscription_checkouts
-          WHERE user_id = ? AND payment_id = ? AND status = 'pending')`)
-        .bind(plan, plan, dbNow, WEEK_MS, dbNow, WEEK_MS, dbNow, userId, userId, paymentId),
-      d1.prepare(`UPDATE ai_subscription_checkouts
-        SET status = 'completed', completed_at = ?, balance_after = ?,
-            expires_at = (SELECT expires_at FROM ai_subscriptions WHERE user_id = ?)
-        WHERE user_id = ? AND payment_id = ? AND status = 'pending'`)
-        .bind(dbNow, receipt.balance, userId, userId, paymentId),
-    ]);
+    // A locked checkout row serializes two callbacks for one payment UUID.
+    // Keep the remote Supabase debit outside this local transaction; its RPC
+    // already enforces payment UUID idempotency across retries and timeouts.
+    await db.transaction(async tx => {
+      const current = await tx.execute(sql`SELECT payment_id, status FROM ai_subscription_checkouts
+        WHERE user_id=${userId} FOR UPDATE`);
+      if (current.rows[0]?.payment_id !== paymentId || current.rows[0]?.status !== "pending") return;
+      await tx.execute(sql`INSERT INTO ai_subscriptions (user_id, plan, expires_at, updated_at)
+        VALUES (${userId}, 'free', 0, 0) ON CONFLICT (user_id) DO NOTHING`);
+      await tx.execute(sql`UPDATE ai_subscriptions SET plan=${plan},
+        expires_at=CASE WHEN plan=${plan} AND expires_at>${dbNow}
+          THEN expires_at+${WEEK_MS} ELSE ${dbNow}+${WEEK_MS} END,
+        updated_at=${dbNow} WHERE user_id=${userId}`);
+      await tx.execute(sql`UPDATE ai_subscription_checkouts SET status='completed',
+        completed_at=${dbNow}, balance_after=${receipt.balance},
+        expires_at=(SELECT expires_at FROM ai_subscriptions WHERE user_id=${userId})
+        WHERE user_id=${userId} AND payment_id=${paymentId} AND status='pending'`);
+    });
 
     const [finished] = await db.select().from(subscriptionCheckouts)
       .where(eq(subscriptionCheckouts.userId, userId)).limit(1);

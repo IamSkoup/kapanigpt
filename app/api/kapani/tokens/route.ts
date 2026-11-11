@@ -1,11 +1,10 @@
-import { env } from "cloudflare:workers";
 import { getDb } from "@/db";
 import { tokenCheckouts } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { TOKEN_PACKS, kapaniRpc, verifiedKapaniBank, type TokenPack } from "@/lib/kapani";
 import { getFirebaseUserId } from "@/lib/usage";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 type BankReceipt = { success?: boolean; plan?: string; balance?: number; transactionId?: string };
@@ -19,8 +18,6 @@ export async function POST(request: Request) {
     const token = request.headers.get("x-kapani-token") || "";
     const bank = await verifiedKapaniBank(token);
     const db = getDb();
-    const d1 = env.DB;
-    if (!d1) throw new Error("Хранилище токенов KapaniGPT недоступно.");
 
     if (data.action === "start") {
       const [pending] = await db.select().from(tokenCheckouts)
@@ -66,18 +63,23 @@ export async function POST(request: Request) {
       throw new Error("Банк не подтвердил покупку. Повтори с тем же номером.");
 
     const now = Date.now();
-    // Transactional D1 batch: even two concurrent confirmations credit once.
-    await d1.batch([
-      d1.prepare("INSERT OR IGNORE INTO ai_token_wallets (user_id, balance, updated_at) VALUES (?, 0, ?)").bind(userId, now),
-      d1.prepare(`UPDATE ai_token_wallets SET balance=balance+?, updated_at=?
-        WHERE user_id=? AND EXISTS (
-          SELECT 1 FROM ai_token_checkouts WHERE user_id=? AND payment_id=? AND status='pending')`)
-        .bind(pack.tokens, now, userId, userId, paymentId),
-      d1.prepare(`UPDATE ai_token_checkouts SET status='completed', completed_at=?, bank_balance_after=?,
-        tokens_after=(SELECT balance FROM ai_token_wallets WHERE user_id=?)
-        WHERE user_id=? AND payment_id=? AND status='pending'`)
-        .bind(now, receipt.balance, userId, userId, paymentId),
-    ]);
+    // The row lock and all grants are in one Postgres transaction. An
+    // interrupted confirmation can be retried with the same payment UUID.
+    await db.transaction(async tx => {
+      const current = await tx.execute(sql`SELECT payment_id, status FROM ai_token_checkouts
+        WHERE payment_id=${paymentId} AND user_id=${userId} FOR UPDATE`);
+      if (current.rows[0]?.status !== "pending") return;
+      await tx.execute(sql`INSERT INTO ai_token_wallets (user_id, balance, updated_at)
+        VALUES (${userId}, 0, ${now}) ON CONFLICT (user_id) DO NOTHING`);
+      const credit = await tx.execute(sql`UPDATE ai_token_wallets
+        SET balance=balance+${pack.tokens}, updated_at=${now}
+        WHERE user_id=${userId} RETURNING balance`);
+      const after = Number(credit.rows[0]?.balance);
+      if (!Number.isSafeInteger(after)) throw new Error("Не удалось подтвердить баланс токенов.");
+      await tx.execute(sql`UPDATE ai_token_checkouts SET status='completed',
+        completed_at=${now}, bank_balance_after=${receipt.balance}, tokens_after=${after}
+        WHERE payment_id=${paymentId} AND user_id=${userId} AND status='pending'`);
+    });
     const [confirmed] = await db.select().from(tokenCheckouts)
       .where(eq(tokenCheckouts.paymentId, paymentId)).limit(1);
     if (!confirmed || confirmed.status !== "completed")

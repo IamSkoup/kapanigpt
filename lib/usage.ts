@@ -118,27 +118,32 @@ export async function spendUsage(account: Account, kind: "text" | "image", amoun
   if (kind === "image") {
     const period = dayPeriod();
     await database.insert(usage).values({ userId: account.userId, period, spent: 0, images: 0 }).onConflictDoNothing();
-    const changed = await database.run(sql`UPDATE ai_usage SET images=images+1 WHERE user_id=${account.userId} AND period=${period} AND images<${plan.imageLimit}`);
-    if (!changed.meta?.changes) throw new Error("Дневной лимит изображений исчерпан.");
+    const changed = await database.execute(sql`UPDATE ai_usage SET images=images+1 WHERE user_id=${account.userId} AND period=${period} AND images<${plan.imageLimit}`);
+    if (changed.rowCount !== 1) throw new Error("Дневной лимит изображений исчерпан.");
     return "limit";
   }
   const week = weekPeriod(), five = fiveHourPeriod(), userId = account.userId;
   const weeklyBudget = plan.weeklyBudget, fiveHourBudget = plan.fiveHourBudget;
   await database.insert(usage).values([{ userId, period: week, spent: 0, images: 0 }, { userId, period: five, spent: 0, images: 0 }]).onConflictDoNothing();
-  // A single SQLite UPDATE changes both counters or neither: concurrent
-  // requests cannot spend the five-hour budget after the weekly budget is gone.
-  const changed = await database.run(sql`
-    UPDATE ai_usage SET spent=spent+${amount}
-    WHERE user_id=${userId} AND period IN (${week},${five})
-    AND EXISTS (SELECT 1 FROM ai_usage w WHERE w.user_id=${userId} AND w.period=${week} AND w.spent+${amount}<=${weeklyBudget})
-    AND EXISTS (SELECT 1 FROM ai_usage h WHERE h.user_id=${userId} AND h.period=${five} AND h.spent+${amount}<=${fiveHourBudget})
-  `);
-  if (changed.meta?.changes === 2) return "limit";
+  // Lock both counters in a fixed order. Unlike two independent UPDATEs,
+  // a concurrent request cannot charge one period without the other.
+  const charged = await database.transaction(async tx => {
+    const locked = await tx.execute(sql`SELECT period, spent FROM ai_usage
+      WHERE user_id=${userId} AND period IN (${week},${five}) ORDER BY period FOR UPDATE`);
+    const spent = new Map(locked.rows.map(row => [String(row.period), Number(row.spent)]));
+    if (spent.size !== 2 || spent.get(week)! + amount > weeklyBudget || spent.get(five)! + amount > fiveHourBudget)
+      return false;
+    const changed = await tx.execute(sql`UPDATE ai_usage SET spent=spent+${amount}
+      WHERE user_id=${userId} AND period IN (${week},${five})`);
+    if (changed.rowCount !== 2) throw new Error("Не удалось записать расход лимита.");
+    return true;
+  });
+  if (charged) return "limit";
 
   // After either shared limit is depleted, consume bought tokens atomically.
-  const tokenCharge = await database.run(sql`UPDATE ai_token_wallets SET balance=balance-${amount}, updated_at=${Date.now()}
+  const tokenCharge = await database.execute(sql`UPDATE ai_token_wallets SET balance=balance-${amount}, updated_at=${Date.now()}
     WHERE user_id=${userId} AND balance>=${amount}`);
-  if (tokenCharge.meta?.changes === 1) return "tokens";
+  if (tokenCharge.rowCount === 1) return "tokens";
   const counts = await getUsage(account);
   throw new Error(counts.tokensBalance > 0
     ? `Общий лимит исчерпан, а токенов не хватает на этот запрос (нужно ${amount}). Пополни запас.`
@@ -147,7 +152,7 @@ export async function spendUsage(account: Account, kind: "text" | "image", amoun
 
 export async function refundUsage(account: Account, kind: "text" | "image", amount = 1, source: ChargeSource = "limit") {
   const database = getDb();
-  if (kind === "text" && source === "tokens") await database.run(sql`UPDATE ai_token_wallets SET balance=balance+${amount}, updated_at=${Date.now()} WHERE user_id=${account.userId}`);
-  else if (kind === "text") await database.run(sql`UPDATE ai_usage SET spent=max(0,spent-${amount}) WHERE user_id=${account.userId} AND period IN (${weekPeriod()},${fiveHourPeriod()})`);
-  else await database.run(sql`UPDATE ai_usage SET images=max(0,images-1) WHERE user_id=${account.userId} AND period=${dayPeriod()}`);
+  if (kind === "text" && source === "tokens") await database.execute(sql`UPDATE ai_token_wallets SET balance=balance+${amount}, updated_at=${Date.now()} WHERE user_id=${account.userId}`);
+  else if (kind === "text") await database.execute(sql`UPDATE ai_usage SET spent=GREATEST(0,spent-${amount}) WHERE user_id=${account.userId} AND period IN (${weekPeriod()},${fiveHourPeriod()})`);
+  else await database.execute(sql`UPDATE ai_usage SET images=GREATEST(0,images-1) WHERE user_id=${account.userId} AND period=${dayPeriod()}`);
 }

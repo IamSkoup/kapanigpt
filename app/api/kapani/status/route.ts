@@ -1,7 +1,7 @@
 import { verifiedKapaniBank } from "@/lib/kapani";
 import { getFirebaseUserId } from "@/lib/usage";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 // Kapani is only the payment account. Never return its access/refresh token or
 // use its identity as the owner of KapaniGPT conversations or subscriptions.

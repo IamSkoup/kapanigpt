@@ -1,4 +1,4 @@
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 // A short, cached end-to-end probe. It checks actual inference, not just a 200
 // from a provider's account endpoint, and exposes no credentials or prompts.

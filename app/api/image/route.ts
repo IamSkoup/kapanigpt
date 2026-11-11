@@ -1,4 +1,4 @@
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 // Old generated files remain accessible through /api/image/file/:id so
 // existing chat history is not broken, but no new generation is offered.

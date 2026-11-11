@@ -3,7 +3,7 @@ import { getFirebaseUserId } from "@/lib/usage";
 import { readPreferences, savePreferences } from "@/lib/preferences";
 import { type UserPreferences } from "@/lib/preferences-config";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
   try {
