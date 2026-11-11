@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1793222388023,
+      "tag": "0000_amused_kulan_gath",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1793259481205,
+      "tag": "0001_amazing_eternals",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793445306350,
+      "tag": "0002_superb_starjammers",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1793457777326,
+      "tag": "0003_last_obadiah_stane",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1793459420226,
+      "tag": "0004_free_proemial_gods",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1794232606904,
+      "tag": "0005_big_sharon_carter",
+      "breakpoints": true
+    }
+  ]
+}
