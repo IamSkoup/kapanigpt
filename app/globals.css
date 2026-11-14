@@ -807,3 +807,5 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .auth-opening-note { display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: 9px; padding: 10px; background: #1b3a26; color: #b9f2c9; line-height: 1.4; font-size: 11px; }
 @media (max-width: 700px) { .mobile-promo-button { display: inline-flex; } .topbar-right { gap: 5px; } }
 @media (max-width: 390px) { .mobile-promo-button { padding: 7px; font-size: 10px; } .mobile-promo-button svg { width: 13px; } .topbar-right .usage-chip { padding: 6px; } }
+
+.web-sources{margin:14px 0 8px;padding:12px;border:1px solid var(--border,#2c503c);border-radius:10px;font-size:12px}.web-sources>strong{display:block;margin-bottom:9px}.web-sources>div{display:flex;flex-wrap:wrap;gap:7px}.web-sources a{display:inline-flex;max-width:100%;gap:5px;padding:7px 9px;border:1px solid var(--border,#2c503c);border-radius:7px;color:inherit;text-decoration:none;overflow-wrap:anywhere}.web-sources a:hover{text-decoration:underline}.web-sources a span{opacity:.75}

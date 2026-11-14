@@ -10,7 +10,8 @@ import { DEFAULT_PREFERENCES, type UserPreferences } from "@/lib/preferences-con
 import { type GeneratedFile } from "@/lib/response-files";
 
 type Attachment = { name: string; type: string; size: number; data?: string; text?: string };
-type ChatMessage = { id: string; role: "user" | "assistant"; content: string; createdAt: number; attachments?: Attachment[]; generatedFiles?: GeneratedFile[] };
+type WebSource = { title: string; url: string; snippet: string };
+type ChatMessage = { id: string; role: "user" | "assistant"; content: string; createdAt: number; attachments?: Attachment[]; generatedFiles?: GeneratedFile[]; sources?: WebSource[] };
 type Chat = { id: string; title: string; updatedAt: number; pinned?: boolean; mode: ChatMode };
 const DEFAULT_MODEL = "kapani-1";
 type Usage = { plan: Plan; providerConfigured: boolean; remainingPercent: number; remainingFiveHourPercent: number; fiveHourBudget: number; weeklyBudget: number; tokensBalance: number; fiveHourResetsAt: number; imagesLeft: number; imagesMax: number; nickname: string | null; balance: number | null; expiresAt: string | null; promoEligible: boolean; promoClaimed: boolean; promoStartsAt: string | null; promoExpiresAt: string | null };
@@ -425,18 +426,20 @@ export default function Home() {
     });
     let complete = "";
     let generatedFiles: GeneratedFile[] = [];
+    let sources: WebSource[] = [];
     try {
       const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...await authorizationHeaders() }, body: JSON.stringify({ messages: prior, mode: chatMode, model: chatMode === "work" ? model : DEFAULT_MODEL, reasoning }), signal: controller.signal });
       if (!response.ok) { const data = await response.json().catch(() => ({})) as { error?: string }; throw new Error(data.error || "Ошибка сервера " + response.status); }
-      const initial = await response.json() as { usage?: Usage; choices?: Array<{ message?: { content?: string; files?: GeneratedFile[] } }> };
+      const initial = await response.json() as { usage?: Usage; choices?: Array<{ message?: { content?: string; files?: GeneratedFile[]; sources?: WebSource[] } }> };
       if (initial.usage) setUsage(initial.usage);
       complete = initial.choices?.[0]?.message?.content || "";
       generatedFiles = initial.choices?.[0]?.message?.files || [];
+      sources = initial.choices?.[0]?.message?.sources || [];
       if (!complete.trim() && !generatedFiles.length) throw new Error("Модель вернула пустой ответ. Попробуй другую модель.");
     } catch (e) { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Ошибка генерации."); }
     finally {
       if (complete.trim() || generatedFiles.length) {
-        const assistantMessage: ChatMessage = { id: makeId(), role: "assistant", content: complete, generatedFiles, createdAt: Date.now() + 1 };
+        const assistantMessage: ChatMessage = { id: makeId(), role: "assistant", content: complete, generatedFiles, sources, createdAt: Date.now() + 1 };
         if (saveHistory) {
           try { await setDoc(doc(database, "users", uid, "chats", currentChat, "messages", assistantMessage.id), assistantMessage); } catch {}
         } else {
@@ -563,6 +566,7 @@ export default function Home() {
             <div className="message-edit-footer"><span>Ctrl+Enter — сохранить</span><button onClick={() => setEditingMessageId(null)}>Отмена</button>
               <button className="message-edit-save" disabled={messageBusy || !editingMessageText.trim()} onClick={() => submitMessageEdit(m, laterCount)}><Check size={14}/> Сохранить</button></div>
           </div> : m.content && <div className={m.role === "user" ? "user-bubble" : "assistant-copy"}>{m.role === "user" ? m.content : renderText(m.content)}</div>}
+          {!!m.sources?.length && <div className="web-sources"><strong>Источники из интернета</strong><div>{m.sources.map((source, i) => <a key={i} href={source.url} target="_blank" rel="noopener noreferrer" title={source.snippet}><span>[{i + 1}]</span> {source.title}</a>)}</div></div>}
           {!!m.generatedFiles?.length && <div className="generated-files">{m.generatedFiles.map((file, i) => <button className="generated-file" key={m.id + i} title={"Скачать " + file.name} onClick={() => downloadGeneratedFile(file)}><span className="generated-file-icon"><FileCode2 size={19}/></span><span className="generated-file-name"><strong>{file.name}</strong><small>Готовый файл · {prettySize(new Blob([file.content]).size)}</small></span><Download size={17}/></button>)}</div>}
           {!editing && <div className="message-actions">
             <button aria-label="Копировать сообщение" title="Копировать" onClick={() => void copyMessage(m)}>{copiedId === m.id ? <Check size={15}/> : <Clipboard size={15}/>}</button>

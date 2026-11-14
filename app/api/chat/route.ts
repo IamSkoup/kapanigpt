@@ -5,6 +5,7 @@ import { kapaniSystemKnowledge } from "@/lib/knowledge";
 import { readPreferences } from "@/lib/preferences";
 import { DEFAULT_PREFERENCES } from "@/lib/preferences-config";
 import { extractGeneratedFiles } from "@/lib/response-files";
+import { decideWebSearch, searchWeb, webContext } from "@/lib/web-search";
 
 export const runtime = "nodejs";
 // Kilo explicitly offers anonymous access to its free-model gateway.
@@ -91,6 +92,15 @@ export async function POST(request: NextRequest) {
       if (!output) throw new Error("Нейросеть не вернула текст. Попробуй ещё раз — лимит не потрачен.");
       return output;
     };
+    // Search only on the server; never expose provider credentials to clients.
+    let sources: Awaited<ReturnType<typeof searchWeb>> = [];
+    try {
+      const query = await decideWebSearch(question, askProvider);
+      if (query) sources = await searchWeb(query, request.signal);
+    } catch { /* Search outages do not break ordinary chat. */ }
+    if (sources.length) history[0].content += webContext(sources);
+    else if (/(найди|поиск|в интернете|источники|сегодня|latest|current)/i.test(question))
+      history[0].content += "\n\nПоиск не предоставил источников. Не утверждай, что проверил интернет в реальном времени.";
     let editorialNote = "";
     for (let pass = 0; pass < passes - 1; pass++) {
       const instruction = pass === 0
@@ -107,7 +117,7 @@ export async function POST(request: NextRequest) {
     const answer = await askProvider([{ ...history[0], content: finalSystem }, ...history.slice(1)],
       reasoning === "maximum" ? 2800 : profile === "kapani-sky" ? 2200 : profile === "kapani-grass" ? 1700 : 1300);
     const generated = extractGeneratedFiles(answer);
-    return Response.json({ choices: [{ message: { role: "assistant", content: generated.text, files: generated.files } }], usage: await getUsage(account) },
+    return Response.json({ choices: [{ message: { role: "assistant", content: generated.text, files: generated.files, sources } }], usage: await getUsage(account) },
       { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
