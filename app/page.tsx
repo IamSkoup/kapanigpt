@@ -628,6 +628,10 @@ export default function Home() {
               <button className="message-edit-save" disabled={messageBusy || !editingMessageText.trim()} onClick={() => submitMessageEdit(m, laterCount)}><Check size={14}/> Сохранить</button></div>
           </div> : m.content && <div className={m.role === "user" ? "user-bubble" : "assistant-copy"}>{m.role === "user" ? m.content : renderText(m.content)}</div>}
           {!!m.sources?.length && <div className="web-sources"><strong>Источники из интернета</strong><div>{m.sources.map((source, i) => <a key={i} href={source.url} target="_blank" rel="noopener noreferrer" title={source.snippet}><span>[{i + 1}]</span> {source.title}</a>)}</div></div>}
+          {!!m.generatedFiles?.length && m.generatedFiles.some(file => file.mime === "image/svg+xml") &&
+            <div className="svg-previews">{m.generatedFiles.filter(file => file.mime === "image/svg+xml").map((file, i) =>
+              <div key={i} className="svg-preview"><img loading="lazy" src={"data:image/svg+xml;charset=utf-8," + encodeURIComponent(file.content)}
+                alt={file.name || "Векторная иллюстрация"} /></div>)}</div>}
           {!!m.generatedFiles?.length && <div className="generated-files">{m.generatedFiles.map((file, i) => <button className="generated-file" key={m.id + i} title={"Скачать " + file.name} onClick={() => downloadGeneratedFile(file)}><span className="generated-file-icon"><FileCode2 size={19}/></span><span className="generated-file-name"><strong>{file.name}</strong><small>Готовый файл · {prettySize(new Blob([file.content]).size)}</small></span><Download size={17}/></button>)}</div>}
           {!editing && <div className="message-actions">
             <button aria-label="Копировать сообщение" title="Копировать" onClick={() => void copyMessage(m)}>{copiedId === m.id ? <Check size={15}/> : <Clipboard size={15}/>}</button>
