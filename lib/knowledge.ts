@@ -11,10 +11,20 @@ const fallback = `KapaniGPT — русскоязычный ИИ-помощник
 // the ~53K-character knowledge base in every single context window.
 const stopWords = new Set(["это", "что", "как", "где", "когда", "если", "тебя", "меня", "про", "для", "были", "будет", "можно", "сделай", "расскажи", "какой", "какая", "какие", "самый", "просто", "очень", "почему", "the", "and", "with", "what", "about", "this"]);
 
-export async function kapaniSystemKnowledge(question: string, budget = 22000) {
+// Cache the large owner prompt briefly in warm function instances to avoid
+// fetching the same document from the database for every chat message.
+let promptCache: { text: string; expiresAt: number } | null = null;
+async function readMasterPrompt() {
+  if (promptCache && promptCache.expiresAt > Date.now()) return promptCache.text;
   const [setting] = await getDb().select({ value: siteSettings.value }).from(siteSettings)
     .where(eq(siteSettings.key, "master_prompt")).limit(1);
-  const paragraphs = (setting?.value || fallback).trim().split(/\n\s*\n/g).map(part => part.trim()).filter(Boolean);
+  const text = setting?.value || fallback;
+  promptCache = { text, expiresAt: Date.now() + 120_000 };
+  return text;
+}
+
+export async function kapaniSystemKnowledge(question: string, budget = 22000) {
+  const paragraphs = (await readMasterPrompt()).trim().split(/\n\s*\n/g).map(part => part.trim()).filter(Boolean);
   const identity = paragraphs.slice(0, 5).join("\n\n");
   const terms = Array.from(new Set((question.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) || [])
     .map(word => word.slice(0, Math.min(word.length, 6)))
