@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { enforceModel, estimateCost, getAccount, getUsage, spendUsage } from "@/lib/usage";
+import { enforceModel, estimateCost, getAccount, spendUsage } from "@/lib/usage";
 import { type ChatMode, type Reasoning } from "@/lib/kapani";
 import { kapaniSystemKnowledge } from "@/lib/knowledge";
 import { readPreferences } from "@/lib/preferences";
@@ -115,9 +115,8 @@ export async function POST(request: NextRequest) {
     // Charge only after a valid answer exists, never before an upstream request.
     // If Netlify or Kilo fails while generating, no debit needs to be refunded.
     await spendUsage(account, "text", cost);
-    const usage = await getUsage(account).catch(() => null);
     return { choices: [{ message: { role: "assistant", content: generated.text,
-      files: generated.files, sources } }], usage };
+      files: generated.files, sources } }] };
   }
 
   // Flush response headers immediately: Netlify can return a platform 502
