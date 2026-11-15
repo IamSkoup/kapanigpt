@@ -13,7 +13,8 @@ export const runtime = "nodejs";
 const CHAT_ENDPOINT = "https://ai-gateway.kilo.ai/api/v1/chat/completions";
 const ALLOWED_MODELS = new Set(["kapani-1", "kapani-grass", "kapani-sky"]);
 const REASONING_LEVELS = new Set(["off", "light", "medium", "high", "very-high", "maximum"]);
-type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
+type UserImage = { name?: string; data: string };
+type ChatMessage = { role: "user" | "assistant" | "system"; content: string; images?: UserImage[] };
 
 function profileInstruction(profile: string, reasoning: Reasoning) {
   const profileText = profile === "kapani-sky"
@@ -23,7 +24,7 @@ function profileInstruction(profile: string, reasoning: Reasoning) {
       : "Профиль KapaniGPT 1. Отвечай точно, ясно и по существу.";
   const reasoningText = reasoning === "off" ? "Отвечай без лишней демонстрации рассуждений."
     : `Режим рассуждения: ${reasoning}. Проверяй выводы, объясняй полезные промежуточные шаги, но не раскрывай скрытую цепочку рассуждений.`;
-  return `${profileText} ${reasoningText} Следуй характеру и знаниям KapaniGPT из предоставленной базы. Генерация изображений в текущем KapaniGPT отключена. Когда пользователь явно просит создать файл или файлы для скачивания, можешь приложить до четырёх настоящих текстовых файлов: для каждого выведи блок <kapani_file name="имя.ext">полное содержимое файла</kapani_file>. Поддерживаются txt, md, html, css, js, ts, tsx, jsx, json, csv, py, svg, xml, sql, yaml. Не выдумывай бинарные форматы вроде pdf, docx, zip, png. В обычных ответах не создавай блоки файлов. Если спрашивают о настоящем движке, честно объясняй, что бренд KapaniGPT использует внешние модели через Kilo AI. Не выдумывай факты. Отвечай на языке пользователя.`;
+  return `${profileText} ${reasoningText} Следуй характеру и знаниям KapaniGPT из предоставленной базы. Если просят нарисовать изображение, можешь создать настоящую векторную SVG-иллюстрацию как файл с расширением .svg, когда это подходит к запросу. Не заявляй, будто можешь создавать PNG, JPEG или фотореалистичные картинки без отдельного графического сервиса. Когда пользователь явно просит создать файл или файлы для скачивания, можешь приложить до четырёх настоящих текстовых файлов: для каждого выведи блок <kapani_file name="имя.ext">полное содержимое файла</kapani_file>. Поддерживаются txt, md, html, css, js, ts, tsx, jsx, json, csv, py, svg, xml, sql, yaml. Не выдумывай бинарные форматы вроде pdf, docx, zip, png. В обычных ответах не создавай блоки файлов. Если спрашивают о настоящем движке, честно объясняй, что бренд KapaniGPT использует внешние модели через Kilo AI. Не выдумывай факты. Отвечай на языке пользователя.`;
 }
 
 function reasoningEffort(reasoning: Reasoning) {
@@ -46,12 +47,23 @@ export async function POST(request: NextRequest) {
   catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Доступ запрещён." }, { status: 403 }); }
 
   if (!Array.isArray(payload.messages) || !payload.messages.length || payload.messages.length > 42 ||
-    payload.messages.some(m => !m || !["user", "assistant", "system"].includes(m.role) || typeof m.content !== "string")) {
-    return Response.json({ error: "Неверная история сообщений." }, { status: 400 });
+    payload.messages.some(m => !m || !["user", "assistant", "system"].includes(m.role) || typeof m.content !== "string" ||
+      (m.images !== undefined && (!Array.isArray(m.images) || m.images.length > 4 ||
+        m.images.some(image => !image || typeof image.data !== "string" || image.data.length > 240000 ||
+          !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(image.data) ||
+          (image.name !== undefined && (typeof image.name !== "string" || image.name.length > 120))))))) {
+    return Response.json({ error: "Неверная история сообщений или слишком большие изображения." }, { status: 400 });
   }
 
-  // Bound both payload size and context. Large knowledge prompts slow the free gateway.
-  const messages = payload.messages.slice(-10).map(message => ({ role: message.role, content: message.content.slice(0, 2800) }));
+  // Keep an adequate excerpt of the newest user file while bounding context.
+  // Only the final message may contain image bytes to prevent accidental reuploads.
+  const tail = payload.messages.slice(-10);
+  const messages = tail.map((message, i) => ({
+    role: message.role, content: message.content.slice(0, i === tail.length - 1 ? 30000 : 3200),
+    ...(i === tail.length - 1 && message.role === "user" && message.images?.length
+      ? { images: message.images } : {}),
+  }));
+  const hasImages = messages.some(message => !!message.images?.length);
   const question = [...messages].reverse().find(message => message.role === "user")?.content || "";
   const cost = estimateCost(profile, reasoning, account.plan, mode);
   const isWebQuestion = /(?:найди|поищи|погугли|поиск|в интернете|источник|ссылк|сейчас|сегодня|вчера|недавно|последн(?:ие|яя|ий)|новост|актуальн|курс валют|погод|latest|current|today|recent|search (?:the )?web|look up)/i.test(question);
@@ -62,8 +74,9 @@ export async function POST(request: NextRequest) {
   async function generate() {
     // Fetch independent data in parallel instead of serial database round trips.
     const [prefs, knowledge, sources] = await Promise.all([
-      readPreferences(account.userId).catch(() => DEFAULT_PREFERENCES),
-      kapaniSystemKnowledge(question, profile === "kapani-sky" ? 13500 : profile === "kapani-grass" ? 11500 : 9500),
+      readPreferences(account.userId),
+      kapaniSystemKnowledge(question, /капан|персонаж|характер|жител|рыжик|вова|дурдом|сюжет|канон/i.test(question)
+        ? 30000 : profile === "kapani-sky" ? 26000 : profile === "kapani-grass" ? 23000 : 19000),
       isWebQuestion ? searchWeb(question, signal).catch(() => []) : Promise.resolve([]),
     ]);
     const style = prefs.tone === "direct" ? "Пиши кратко, прямо и по делу."
@@ -78,11 +91,24 @@ export async function POST(request: NextRequest) {
     ];
     // One real inference pass. Previously up to three sequential passes plus
     // another LLM request for the search planner caused timeouts and 502s.
+    const providerMessages = history.map(message => ({
+      role: message.role,
+      content: message.images?.length
+        ? [
+            { type: "text", text: message.content || "Опиши прикреплённые изображения." },
+            ...message.images.map(image => ({ type: "image_url", image_url: { url: image.data } })),
+          ]
+        : message.content,
+    }));
+    // A verified free vision-capable Kilo model receives image_url data parts.
+    // Auto Free handles ordinary text, and never receives image bytes.
     const requestBody = JSON.stringify({
-      model: "kilo-auto/free", messages: history,
+      model: hasImages ? "nvidia/nemotron-3.5-super-vl:free" : "kilo-auto/free",
+      messages: providerMessages,
       max_tokens: reasoning === "maximum" ? 2400 : profile === "kapani-sky" ? 1950
         : profile === "kapani-grass" ? 1650 : 1250,
-      reasoning_effort: reasoningEffort(reasoning), stream: false,
+      ...(hasImages ? {} : { reasoning_effort: reasoningEffort(reasoning) }),
+      stream: false,
     });
     let answer = "";
     for (let attempt = 0; attempt < 2; attempt++) {
