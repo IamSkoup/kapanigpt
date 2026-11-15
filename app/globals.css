@@ -271,8 +271,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .prose-line { min-height: 12px; }
 .prose-spacer { height: 13px; }
 .prose-heading { font-size: 17px; font-weight: 680; color: #f2f2f3; margin: 13px 0 8px; }
-.prose-bullet { display: flex; gap: 12px; margin: 4px 0 4px 8px; }
-.prose-bullet > span { color: #a4dfb5; min-width: 12px; }
+.prose-bullet { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px; margin: 4px 0 4px 8px; align-items: start; }
+.prose-bullet-marker { color: #a4dfb5; min-width: 12px; }
+.prose-bullet-content { min-width: 0; overflow-wrap: break-word; word-break: normal; }
 .inline-code { background: #282930; padding: 2px 5px; color: #c1ffd3; font-size: 12px; border-radius: 4px; }
 .code-block { background: #141519; border: 1px solid #33343b; border-radius: 12px; margin: 14px 0; overflow: hidden; }
 .code-head { border-bottom: 1px solid #2d2e34; background: #222329; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; color: #a6b0a9; font-size: 11px; }
