@@ -57,13 +57,21 @@ function renderText(content: string) {
 async function prepareAttachment(file: File): Promise<Attachment> {
   if (file.size > 8 * 1024 * 1024) throw new Error("Максимальный размер файла — 8 МБ.");
   if (file.type.startsWith("image/")) {
-    const image = await createImageBitmap(file), ratio = Math.min(1, 1000 / Math.max(image.width, image.height));
+    const image = await createImageBitmap(file), ratio = Math.min(1, 800 / Math.max(image.width, image.height));
     const canvas = document.createElement("canvas");
     canvas.width = Math.max(1, Math.round(image.width * ratio)); canvas.height = Math.max(1, Math.round(image.height * ratio));
-    canvas.getContext("2d")!.drawImage(image, 0, 0, canvas.width, canvas.height); image.close();
-    let data = canvas.toDataURL("image/jpeg", 0.72);
-    if (data.length > 580000) data = canvas.toDataURL("image/jpeg", 0.45);
-    if (data.length > 750000) throw new Error("Изображение слишком большое даже после сжатия.");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) { image.close(); throw new Error("Этот браузер не умеет сжимать изображения."); }
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    let data = canvas.toDataURL("image/jpeg", 0.65);
+    while (data.length > 220000 && canvas.width > 240 && canvas.height > 240) {
+      canvas.width = Math.round(canvas.width * 0.76);
+      canvas.height = Math.round(canvas.height * 0.76);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      data = canvas.toDataURL("image/jpeg", 0.54);
+    }
+    image.close();
+    if (data.length > 240000) throw new Error("Фото слишком сложное для безопасной отправки. Уменьши его размер.");
     return { name: file.name, type: "image/jpeg", size: file.size, data };
   }
   const textual = /^(text\/|application\/(json|xml|javascript|x-javascript))/.test(file.type) || /\.(txt|md|csv|json|js|ts|tsx|jsx|py|html|css|xml|yaml|yml|log|sql)$/i.test(file.name);
@@ -185,7 +193,7 @@ export default function Home() {
         if (!response.ok) throw new Error("Не удалось загрузить персонализацию");
         const data = await response.json() as UserPreferences;
         if (!cancelled) setPreferences(data);
-      } catch { if (!cancelled) setPreferences(DEFAULT_PREFERENCES); }
+      } catch { if (!cancelled) setPreferencesMessage("Не удалось прочитать персонализацию из аккаунта. Настройки не сброшены, попробуй открыть раздел ещё раз."); }
     })();
     return () => { cancelled = true; };
   }, [uid, authorizationHeaders]);
@@ -400,7 +408,6 @@ export default function Home() {
   async function askAI(textOverride?: string) {
     const text = (textOverride ?? prompt).trim();
     if ((!text && !attachments.length) || streaming || !uid || uploading) return;
-    if (!text && attachments.every(a => a.data)) { setError("Текущая модель пока не умеет смотреть изображения. Напиши вопрос текстом или прикрепи текстовый файл."); return; }
     const userMessage: ChatMessage = { id: makeId(), role: "user", content: text, createdAt: Date.now(), attachments: [...attachments] };
     const history = messagesRef.current.slice(-24), previousId = activeRef.current, currentChat = previousId || doc(collection(database, "users", uid, "chats")).id;
     const saveHistory = preferences.historyEnabled;
@@ -430,9 +437,16 @@ export default function Home() {
     }
     if (controller.signal.aborted) { setStreaming(false); abortRef.current = null; return; }
     const prior = [...history, userMessage].map(msg => {
-      const context = msg.attachments?.filter(a => a.text).map(a => "\n\n[Файл " + a.name + "]\n" + a.text!.slice(0, 1600)).join("") || "";
-      const imageNotice = msg.attachments?.some(a => a.data) ? "\n[Прикреплено изображение, которое модель не видит. Не выдумывай его содержимое.]" : "";
-      return { role: msg.role, content: msg.content + context + imageNotice || "Вложение без текста" };
+      const context = msg.attachments?.filter(a => a.text).map(a => {
+        const excerpt = a.text!.slice(0, 6000);
+        return "\n\n[Файл " + a.name + (a.text!.length > excerpt.length ? ", фрагмент из " + a.text!.length + " символов" : "") + "]\n" + excerpt;
+      }).join("") || "";
+      // Only send image bytes from the current request. Historical messages
+      // remain text-only so photos are not silently sent again on every turn.
+      const images = msg.id === userMessage.id ? (msg.attachments || [])
+        .filter(a => a.data?.startsWith("data:image/jpeg;base64,"))
+        .map(a => ({ name: a.name.slice(0, 120), data: a.data! })) : [];
+      return { role: msg.role, content: (msg.content + context).trim() || (images.length ? "Рассмотри прикреплённые изображения и расскажи, что на них." : "Вложение без текста"), ...(images.length ? { images } : {}) };
     });
     let complete = "";
     let generatedFiles: GeneratedFile[] = [];
@@ -652,7 +666,7 @@ export default function Home() {
       <div className={"composer-dock " + (!messages.length && !streaming ? "home-composer" : "")}><div className="composer-wrap">{error && <div className="error-banner"><CircleHelp size={16} /><span>{error}</span><button onClick={() => setError("")}><X size={15} /></button></div>}{authError && <div className="error-banner"><CircleHelp size={16} /><span>{authError}</span></div>}<div className={"composer " + (streaming ? "is-generating" : "")}>{!!attachments.length && <div className="attachment-list">{attachments.map((a,i) => <div className="attachment-chip" key={i}>{a.data ? <img src={a.data} alt="" /> : <span className="file-square"><FileCode2 size={17} /></span>}<div><b title={a.name}>{a.name}</b><small>{prettySize(a.size)}</small></div><button aria-label={"Убрать " + a.name} onClick={() => setAttachments(old => old.filter((_, index) => index !== i))}><X size={14} /></button></div>)}</div>}
         <textarea ref={inputRef} rows={2} value={prompt} onChange={e => setPrompt(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); askAI(); } }} placeholder="Спроси что угодно" aria-label="Сообщение для KapaniGPT" />
         <div className="composer-toolbar"><div className="tool-left">
-          <input ref={fileRef} type="file" hidden multiple accept="image/*,.txt,.md,.csv,.json,.js,.ts,.tsx,.jsx,.py,.html,.css,.xml,.yaml,.yml,.log,.sql" onChange={e => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} />
+          <input ref={fileRef} type="file" hidden multiple accept="image/png,image/jpeg,image/webp,.txt,.md,.csv,.json,.js,.ts,.tsx,.jsx,.py,.html,.css,.xml,.yaml,.yml,.log,.sql" onChange={e => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} />
           <button className="tool-icon" title="Прикрепить файл" onClick={() => fileRef.current?.click()} disabled={uploading || attachments.length >= 4}><Plus size={21}/></button>
           <span className="toolbar-divider"/>
           {chatMode === "work" && !isFree && <div className="model-trigger composer-model-trigger"><button className="model-pill model-selector" onClick={() => { setModelOpen(!modelOpen); setReasoningOpen(false); }}><Sparkles size={14}/><span>{modelName}</span><ChevronDown size={13}/></button>{modelOpen && <div className="model-dropdown composer-model-dropdown"><div className="dropdown-label">Модель KapaniGPT</div>{MODEL_CHOICES.map((m, index) => <button key={m.id} style={{ animationDelay: index * 55 + "ms" }} className={"model-option animated-choice " + (model === m.id ? "selected" : "")} onClick={() => { setModel(m.id); setModelOpen(false); }}><span className="model-option-mark"><Sparkles size={17}/></span><span><b>{m.name}</b><small>{m.detail}</small></span>{model === m.id && <Check size={16}/>}</button>)}</div>}</div>}
@@ -707,7 +721,7 @@ export default function Home() {
           <div className="settings-content">
             {settingsTab === "account" && <div className="settings-section"><h3>Аккаунт</h3><div className="settings-account-card"><span className="avatar">K</span><div><strong>{auth.currentUser?.displayName || "Пользователь"}</strong><small>{auth.currentUser?.email}</small></div></div>{usage.promoEligible && <div className="opening-offer account-offer"><div className="opening-offer-top"><Gift size={18}/><span>В честь открытия KapaniGPT</span></div><strong>Kapani AI plus на неделю бесплатно</strong><p>Забери подарок один раз. Оплата не нужна.</p><button onClick={claimOpeningPromo} disabled={claimingPromo}>{claimingPromo ? "Активируем…" : "Получить бесплатно"}<ChevronRight size={15}/></button>{promoError && <small className="opening-offer-error">{promoError}</small>}</div>}<div className="settings-row"><div><strong>Подписка</strong><small>{usage.expiresAt ? "До " + new Date(usage.expiresAt).toLocaleDateString("ru-RU") : "Бессрочная бесплатная"}</small></div><span className="settings-value">{tier.name}</span></div>{usage.promoClaimed && usage.promoStartsAt && <div className="settings-row"><div><strong>Подарочная неделя Plus</strong><small>{new Date(usage.promoStartsAt).getTime() > Date.now() ? "Начнётся " + new Date(usage.promoStartsAt).toLocaleDateString("ru-RU") : "Уже получена"}</small></div><span className="settings-value">Использована</span></div>}<button className="settings-plan-button" onClick={() => { setSettingsOpen(false); setShopOpen(true); }}><Crown size={16}/> Подписки и оплата <ChevronRight size={16}/></button>{kapaniSession && <button className="settings-logout" onClick={() => { setKapaniSession(null); setKapaniBank(null); }}>Отключить банк Капаней</button>}<button className="settings-logout" onClick={() => { stopGeneration(); setSettingsOpen(false); signOut(auth).catch(e => setAuthError(e.message)); }}>Выйти из аккаунта</button></div>}
             {settingsTab === "personal" && <div className="settings-section"><h3>Персонализация</h3><p className="settings-intro">KapaniGPT учтёт твои предпочтения во всех новых ответах.</p><label className="settings-field">Что ИИ стоит знать о тебе<textarea rows={4} maxLength={1500} value={preferences.about} onChange={e => setPreferences(old => ({ ...old, about: e.target.value }))} placeholder="Интересы, занятия, контекст…"/></label><label className="settings-field">Как лучше отвечать<textarea rows={4} maxLength={3000} value={preferences.instructions} onChange={e => setPreferences(old => ({ ...old, instructions: e.target.value }))} placeholder="Тон, длина ответов, любимый стиль…"/></label><label className="settings-field">Манера общения<select value={preferences.tone} onChange={e => setPreferences(old => ({ ...old, tone: e.target.value as UserPreferences["tone"] }))}><option value="balanced">Обычная</option><option value="direct">Коротко и прямо</option><option value="creative">Творческая</option></select></label></div>}
-            {settingsTab === "privacy" && <div className="settings-section"><h3>Конфиденциальность</h3><div className="settings-row"><div><strong>Сохранять историю чатов</strong><small>Если выключить, новые сообщения останутся только до перезагрузки страницы. Старые чаты не удаляются.</small></div><button role="switch" aria-checked={preferences.historyEnabled} className={"settings-toggle " + (preferences.historyEnabled ? "on" : "")} onClick={() => setPreferences(old => ({ ...old, historyEnabled: !old.historyEnabled }))}><span/></button></div><div className="settings-row"><div><strong>Удалить сохранённые чаты</strong><small>Все диалоги и сообщения из Firebase. Восстановить нельзя.</small></div><button className="settings-danger" onClick={() => setConfirmDeleteAll(true)}>Удалить</button></div><div className="privacy-note"><ShieldCheck size={17}/><p>Тексты запросов передаются внешнему ИИ-провайдеру для ответа. Выключение истории влияет на хранение в KapaniGPT, а не на обработку у провайдера. Пароли сюда отправлять не стоит.</p></div></div>}
+            {settingsTab === "privacy" && <div className="settings-section"><h3>Конфиденциальность</h3><div className="settings-row"><div><strong>Сохранять историю чатов</strong><small>Если выключить, новые сообщения останутся только до перезагрузки страницы. Старые чаты не удаляются.</small></div><button role="switch" aria-checked={preferences.historyEnabled} className={"settings-toggle " + (preferences.historyEnabled ? "on" : "")} onClick={() => setPreferences(old => ({ ...old, historyEnabled: !old.historyEnabled }))}><span/></button></div><div className="settings-row"><div><strong>Удалить сохранённые чаты</strong><small>Все диалоги и сообщения из Firebase. Восстановить нельзя.</small></div><button className="settings-danger" onClick={() => setConfirmDeleteAll(true)}>Удалить</button></div><div className="privacy-note"><ShieldCheck size={17}/><p>Тексты, файлы и прикреплённые изображения передаются внешнему ИИ-провайдеру для обработки. Бесплатный провайдер может сохранять данные для улучшения своих моделей. Не прикрепляй конфиденциальные документы, личные фотографии других людей и пароли. Выключение истории отключает хранение в KapaniGPT, но не обработку у провайдера.</p></div></div>}
             {settingsTab === "limits" && <div className="settings-section"><h3>Общие лимиты</h3><p className="settings-intro">Один запас на «Чат» и «Работу». Чат тратит всего 1–3 единицы, работа расходует больше в зависимости от модели и рассуждений.</p><div className="quota-card"><div className="quota-heading"><Zap size={16}/><strong>Общий лимит · {tier.name}</strong></div><div className="quota-line"><span>На 5 часов</span><b>{usage.remainingFiveHourPercent}% осталось</b></div><div className="limit-track"><span style={{ width: usage.remainingFiveHourPercent + "%" }}/></div><small>Всего {usage.fiveHourBudget} единиц</small><div className="quota-line"><span>На неделю</span><b>{usage.remainingPercent}% осталось</b></div><div className="limit-track"><span style={{ width: usage.remainingPercent + "%" }}/></div><small>Всего {usage.weeklyBudget} единиц</small></div><div className="quota-card token-quota"><div className="quota-heading"><Wallet size={16}/><strong>Купленные токены</strong></div><div className="token-quota-amount">{usage.tokensBalance.toLocaleString("ru-RU")}</div><p className="settings-intro">Не сгорают. После окончания лимита списываются автоматически, при ошибке модели возвращаются.</p><button className="settings-plan-button" onClick={() => { setSettingsOpen(false); setShopTab("tokens"); setShopOpen(true); }}><Zap size={16}/> Купить токены <ChevronRight size={16}/></button></div><p className="settings-intro">Пятичасовой лимит обновится {usage.fiveHourResetsAt ? new Date(usage.fiveHourResetsAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "скоро"}. У ИИ-провайдера есть собственные ограничения нагрузки.</p><button className="settings-plan-button" onClick={() => { setSettingsOpen(false); setShopTab("plans"); setShopOpen(true); }}><Crown size={16}/> Сменить тариф <ChevronRight size={16}/></button></div>}
             {settingsTab === "appearance" && <div className="settings-section"><h3>Интерфейс</h3><div className="settings-row"><div><strong>Компактный режим</strong><small>Меньше отступов и декоративных элементов.</small></div><button role="switch" aria-checked={compact} className={"settings-toggle " + (compact ? "on" : "")} onClick={() => setCompact(!compact)}><span/></button></div><div className="settings-row"><div><strong>Цветовая схема</strong><small>Тёмная основа, зелёные градиенты.</small></div><span className="settings-value">Чёрно-зелёная</span></div></div>}
           </div>
