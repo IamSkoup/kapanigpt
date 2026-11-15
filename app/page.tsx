@@ -405,20 +405,30 @@ export default function Home() {
     const history = messagesRef.current.slice(-24), previousId = activeRef.current, currentChat = previousId || doc(collection(database, "users", uid, "chats")).id;
     const saveHistory = preferences.historyEnabled;
     setError(""); setPrompt(""); setAttachments([]); setStreamedText("");
+    const controller = new AbortController(); abortRef.current = controller; setStreaming(true);
     if (saveHistory) {
       try {
-        if (!previousId) {
-          const title = text.replace(/\s+/g, " ").slice(0, 45) || attachments[0]?.name || "Новый чат";
-          await setDoc(doc(database, "users", uid, "chats", currentChat), { title, mode: chatMode, pinned: false, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-          setChatId(currentChat);
-        } else await editChat(currentChat, {});
-        await setDoc(doc(database, "users", uid, "chats", currentChat, "messages", userMessage.id), userMessage);
-      } catch (e) { setError("Не удалось сохранить чат в Firebase: " + (e instanceof Error ? e.message : "")); return; }
+        // Chat metadata and its new message are independent Firestore writes.
+        // Run both at once so the model is not delayed by two sequential round trips.
+        const writeChat = !previousId
+          ? setDoc(doc(database, "users", uid, "chats", currentChat), {
+              title: text.replace(/\s+/g, " ").slice(0, 45) || attachments[0]?.name || "Новый чат",
+              mode: chatMode, pinned: false, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+            })
+          : editChat(currentChat, {});
+        const writeMessage = setDoc(doc(database, "users", uid, "chats", currentChat, "messages", userMessage.id), userMessage);
+        await Promise.all([writeChat, writeMessage]);
+        if (!previousId) setChatId(currentChat);
+      } catch (e) {
+        setStreaming(false); abortRef.current = null;
+        setError("Не удалось сохранить чат в Firebase: " + (e instanceof Error ? e.message : ""));
+        return;
+      }
     } else {
       setTemporaryChatStarted(true);
       const next = [...messagesRef.current, userMessage]; messagesRef.current = next; setMessages(next);
     }
-    const controller = new AbortController(); abortRef.current = controller; setStreaming(true);
+    if (controller.signal.aborted) { setStreaming(false); abortRef.current = null; return; }
     const prior = [...history, userMessage].map(msg => {
       const context = msg.attachments?.filter(a => a.text).map(a => "\n\n[Файл " + a.name + "]\n" + a.text!.slice(0, 1600)).join("") || "";
       const imageNotice = msg.attachments?.some(a => a.data) ? "\n[Прикреплено изображение, которое модель не видит. Не выдумывай его содержимое.]" : "";
