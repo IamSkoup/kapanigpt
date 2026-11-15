@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
   const profile = ALLOWED_MODELS.has(payload.model || "") ? payload.model! : "kapani-1";
   const reasoning = REASONING_LEVELS.has(payload.reasoning || "") ? payload.reasoning! : "off";
   const mode: ChatMode = payload.mode === "work" ? "work" : "chat";
-  let account;
+  let account: Awaited<ReturnType<typeof getAccount>>;
   try { account = await getAccount(request); enforceModel(account.plan, profile, reasoning, mode); }
   catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Доступ запрещён." }, { status: 403 }); }
 
