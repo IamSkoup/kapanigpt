@@ -48,8 +48,8 @@ function renderText(content: string) {
     return <div className="prose-lines" key={index}>{block.split("\n").map((line, i) => {
       const heading = line.match(/^(#{1,3})\s+(.+)/);
       if (heading) return <div key={i} className="prose-heading">{heading[2]}</div>;
-      if (/^[-*] /.test(line)) return <div key={i} className="prose-bullet"><span>•</span>{inlineText(line.slice(2))}</div>;
-      if (/^\d+\. /.test(line)) return <div key={i} className="prose-bullet"><span>{line.match(/^\d+/)?.[0]}.</span>{inlineText(line.replace(/^\d+\. /, ""))}</div>;
+      if (/^[-*] /.test(line)) return <div key={i} className="prose-bullet"><span className="prose-bullet-marker">•</span><span className="prose-bullet-content">{inlineText(line.slice(2))}</span></div>;
+      if (/^\d+\. /.test(line)) return <div key={i} className="prose-bullet"><span className="prose-bullet-marker">{line.match(/^\d+/)?.[0]}.</span><span className="prose-bullet-content">{inlineText(line.replace(/^\d+\. /, ""))}</span></div>;
       return <div key={i} className={line ? "prose-line" : "prose-spacer"}>{inlineText(line)}</div>;
     })}</div>;
   });
@@ -430,8 +430,9 @@ export default function Home() {
     try {
       const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...await authorizationHeaders() }, body: JSON.stringify({ messages: prior, mode: chatMode, model: chatMode === "work" ? model : DEFAULT_MODEL, reasoning }), signal: controller.signal });
       if (!response.ok) { const data = await response.json().catch(() => ({})) as { error?: string }; throw new Error(data.error || "Ошибка сервера " + response.status); }
-      const initial = await response.json() as { usage?: Usage; choices?: Array<{ message?: { content?: string; files?: GeneratedFile[]; sources?: WebSource[] } }> };
-      if (initial.usage) setUsage(initial.usage);
+      const initial = await response.json() as { error?: string; usage?: Usage; choices?: Array<{ message?: { content?: string; files?: GeneratedFile[]; sources?: WebSource[] } }> };
+      if (initial.error) throw new Error(initial.error);
+       if (initial.usage) setUsage(initial.usage);
       complete = initial.choices?.[0]?.message?.content || "";
       generatedFiles = initial.choices?.[0]?.message?.files || [];
       sources = initial.choices?.[0]?.message?.sources || [];
