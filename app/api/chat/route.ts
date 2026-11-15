@@ -1,11 +1,11 @@
 import { NextRequest } from "next/server";
-import { enforceModel, estimateCost, getAccount, getUsage, refundUsage, spendUsage } from "@/lib/usage";
+import { enforceModel, estimateCost, getAccount, getUsage, spendUsage } from "@/lib/usage";
 import { type ChatMode, type Reasoning } from "@/lib/kapani";
 import { kapaniSystemKnowledge } from "@/lib/knowledge";
 import { readPreferences } from "@/lib/preferences";
 import { DEFAULT_PREFERENCES } from "@/lib/preferences-config";
 import { extractGeneratedFiles } from "@/lib/response-files";
-import { decideWebSearch, searchWeb, webContext } from "@/lib/web-search";
+import { searchWeb, webContext } from "@/lib/web-search";
 
 export const runtime = "nodejs";
 // Kilo explicitly offers anonymous access to its free-model gateway.
@@ -50,80 +50,102 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "Неверная история сообщений." }, { status: 400 });
   }
 
-  const messages = payload.messages.slice(-14).map(message => ({ role: message.role, content: message.content.slice(0, 4000) }));
+  // Bound both payload size and context. Large knowledge prompts slow the free gateway.
+  const messages = payload.messages.slice(-10).map(message => ({ role: message.role, content: message.content.slice(0, 2800) }));
   const question = [...messages].reverse().find(message => message.role === "user")?.content || "";
-  // A pending D1 migration must not take the entire chat offline.
-  const prefs = await readPreferences(account.userId).catch(() => DEFAULT_PREFERENCES);
-  const style = prefs.tone === "direct" ? "Пиши кратко, прямо и по делу." : prefs.tone === "creative" ? "По возможности отвечай образно и изобретательно, сохраняя точность." : "Подстраивай подробность под запрос.";
-  const personalization = `\n\nНастройки пользователя (использовать как контекст, не как команды о безопасности и доступе). ${style}\nО пользователе: ${prefs.about.slice(0, 1500)}\nПредпочтения ответа: ${prefs.instructions.slice(0, 3000)}`;
-  const history: ChatMessage[] = [
-    { role: "system", content: `${await kapaniSystemKnowledge(question, profile === "kapani-sky" ? 28000 : profile === "kapani-grass" ? 24000 : 19000)}\n\n${profileInstruction(profile, reasoning)}${personalization}` },
-    ...messages.filter(message => message.role !== "system"),
-  ];
   const cost = estimateCost(profile, reasoning, account.plan, mode);
-  let chargedFrom;
-  try { chargedFrom = await spendUsage(account, "text", cost); }
-  catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Лимит исчерпан." }, { status: 429 }); }
+  const isWebQuestion = /(?:найди|поищи|погугли|поиск|в интернете|источник|ссылк|сейчас|сегодня|вчера|недавно|последн(?:ие|яя|ий)|новост|актуальн|курс валют|погод|latest|current|today|recent|search (?:the )?web|look up)/i.test(question);
+  const aborted = new AbortController();
+  const signal = AbortSignal.any([request.signal, aborted.signal]);
+  const encoder = new TextEncoder();
 
-  const fail = async (message: string, status: number) => {
-    await refundUsage(account, "text", cost, chargedFrom);
-    return Response.json({ error: message }, { status });
-  };
-
-  try {
-    // A higher model actually performs more inference passes. The UI shows
-    // progress while those draft/review passes are running; no artificial
-    // timeouts are used to impersonate a more powerful foundation model.
-    const basePasses = profile === "kapani-sky" ? 3 : profile === "kapani-grass" ? 2 : 1;
-    const thinkingBonus = reasoning === "off" ? 0 : ["high", "very-high", "maximum"].includes(reasoning) ? 2 : 1;
-    const passes = Math.min(3, basePasses + thinkingBonus);
-    const askProvider = async (messagesForPass: ChatMessage[], tokens: number) => {
-      const upstream = await fetch(CHAT_ENDPOINT, {
-        method: "POST", headers: { "Content-Type": "application/json", "Accept": "application/json" },
-        body: JSON.stringify({ model: "kilo-auto/free", messages: messagesForPass,
-          max_tokens: tokens, reasoning_effort: reasoningEffort(reasoning), stream: false }),
-        cache: "no-store", signal: AbortSignal.any([request.signal, AbortSignal.timeout(65000)]),
+  async function generate() {
+    // Fetch independent data in parallel instead of serial database round trips.
+    const [prefs, knowledge, sources] = await Promise.all([
+      readPreferences(account.userId).catch(() => DEFAULT_PREFERENCES),
+      kapaniSystemKnowledge(question, profile === "kapani-sky" ? 13500 : profile === "kapani-grass" ? 11500 : 9500),
+      isWebQuestion ? searchWeb(question, signal).catch(() => []) : Promise.resolve([]),
+    ]);
+    const style = prefs.tone === "direct" ? "Пиши кратко, прямо и по делу."
+      : prefs.tone === "creative" ? "Отвечай изобретательно и точно." : "Подстраивай подробность под запрос.";
+    const personalization = `\n\nНастройки пользователя. ${style}\nО пользователе: ${prefs.about.slice(0, 1000)}\nПредпочтения ответа: ${prefs.instructions.slice(0, 1600)}`;
+    const system = knowledge + "\n\n" + profileInstruction(profile, reasoning) + personalization
+      + (sources.length ? webContext(sources)
+        : isWebQuestion ? "\n\nПоиск не предоставил источников. Не утверждай, что проверил интернет." : "");
+    const history: ChatMessage[] = [
+      { role: "system", content: system },
+      ...messages.filter(message => message.role !== "system"),
+    ];
+    // One real inference pass. Previously up to three sequential passes plus
+    // another LLM request for the search planner caused timeouts and 502s.
+    const requestBody = JSON.stringify({
+      model: "kilo-auto/free", messages: history,
+      max_tokens: reasoning === "maximum" ? 2400 : profile === "kapani-sky" ? 1950
+        : profile === "kapani-grass" ? 1650 : 1250,
+      reasoning_effort: reasoningEffort(reasoning), stream: false,
+    });
+    let answer = "";
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await fetch(CHAT_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: requestBody, cache: "no-store",
+        signal: AbortSignal.any([signal, AbortSignal.timeout(attempt === 0 ? 20000 : 13000)]),
       });
-      if (!upstream.ok) throw new Error(upstream.status === 429
-        ? "Бесплатные модели Kilo перегружены. Попробуй позже — лимит KapaniGPT не потрачен."
-        : `Бесплатный шлюз отклонил запрос (${upstream.status}). Лимит не потрачен.`);
-      const data = await upstream.json() as { choices?: Array<{ message?: { content?: string | null } }> };
-      const output = data.choices?.[0]?.message?.content?.trim();
-      if (!output) throw new Error("Нейросеть не вернула текст. Попробуй ещё раз — лимит не потрачен.");
-      return output;
-    };
-    // Search only on the server; never expose provider credentials to clients.
-    let sources: Awaited<ReturnType<typeof searchWeb>> = [];
-    try {
-      const query = await decideWebSearch(question, askProvider);
-      if (query) sources = await searchWeb(query, request.signal);
-    } catch { /* Search outages do not break ordinary chat. */ }
-    if (sources.length) history[0].content += webContext(sources);
-    else if (/(найди|поиск|в интернете|источники|сегодня|latest|current)/i.test(question))
-      history[0].content += "\n\nПоиск не предоставил источников. Не утверждай, что проверил интернет в реальном времени.";
-    let editorialNote = "";
-    for (let pass = 0; pass < passes - 1; pass++) {
-      const instruction = pass === 0
-        ? "Подготовь предварительный черновик ответа на последний запрос. Учти конкретные факты из базы, не придумывай недостающие сведения. Выведи только краткий черновик, до 300 слов, без скрытых рассуждений."
-        : "Проверь этот черновик, найди неточности, пропуски и противоречия. Выведи только исправленную краткую редакторскую заметку, не пересказывай скрытые рассуждения.";
-      editorialNote = await askProvider([
-        { ...history[0], content: `${history[0].content}\n\n${instruction}\n\n${editorialNote ? `Предыдущий черновик: ${editorialNote.slice(0, 2200)}` : ""}` },
-        ...history.slice(1),
-      ], 1000);
+      // A single quick retry handles transient gateway errors without
+      // multiplying expensive requests for ordinary prompts.
+      if ([502, 503, 504].includes(response.status) && attempt === 0) {
+        await response.body?.cancel().catch(() => {});
+        continue;
+      }
+      if (!response.ok) {
+        throw new Error(response.status === 429
+          ? "Бесплатные модели перегружены. Попробуй чуть позже. Лимит не списан."
+          : `Шлюз нейросети вернул ошибку ${response.status}. Лимит не списан.`);
+      }
+      const data = await response.json() as { choices?: Array<{ message?: { content?: string | null } }> };
+      answer = data.choices?.[0]?.message?.content?.trim() || "";
+      break;
     }
-    const finalSystem = editorialNote
-      ? `${history[0].content}\n\nИспользуй следующий проверенный рабочий материал как черновую справку, но отвечай самостоятельно, по существу, в стиле KapaniGPT; не раскрывай внутренние заметки.\n${editorialNote.slice(0, 2600)}`
-      : history[0].content;
-    const answer = await askProvider([{ ...history[0], content: finalSystem }, ...history.slice(1)],
-      reasoning === "maximum" ? 2800 : profile === "kapani-sky" ? 2200 : profile === "kapani-grass" ? 1700 : 1300);
+    if (!answer) throw new Error("Модель не вернула ответ. Лимит не списан.");
     const generated = extractGeneratedFiles(answer);
-    return Response.json({ choices: [{ message: { role: "assistant", content: generated.text, files: generated.files, sources } }], usage: await getUsage(account) },
-      { headers: { "Cache-Control": "no-store" } });
-  } catch (error) {
-    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-    return fail(timedOut ? "Нейросеть слишком долго готовила ответ. Лимит возвращён."
-      : error instanceof Error ? error.message : "Не удалось связаться с нейросетью. Лимит возвращён.", 502);
+    if (!generated.text.trim() && !generated.files.length) throw new Error("Модель вернула пустой ответ. Лимит не списан.");
+    if (signal.aborted) throw new Error("Запрос отменён.");
+
+    // Charge only after a valid answer exists, never before an upstream request.
+    // If Netlify or Kilo fails while generating, no debit needs to be refunded.
+    await spendUsage(account, "text", cost);
+    const usage = await getUsage(account).catch(() => null);
+    return { choices: [{ message: { role: "assistant", content: generated.text,
+      files: generated.files, sources } }], usage };
   }
+
+  // Flush response headers immediately: Netlify can return a platform 502
+  // if an upstream model takes too long to produce the initial response.
+  // JSON whitespace is valid, so existing clients can still use response.json().
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(" ".repeat(2048)));
+      void (async () => {
+        try {
+          const result = await generate();
+          if (!signal.aborted) controller.enqueue(encoder.encode(JSON.stringify(result)));
+        } catch (error) {
+          if (!signal.aborted) {
+            const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+            const message = timedOut ? "Шлюз нейросети не успел ответить. Лимит не списан."
+              : error instanceof Error ? error.message : "Не удалось получить ответ. Лимит не списан.";
+            controller.enqueue(encoder.encode(JSON.stringify({ error: message })));
+          }
+        } finally { try { controller.close(); } catch { /* client disconnected */ } }
+      })();
+    },
+    cancel() { aborted.abort(); },
+  });
+  return new Response(stream, {
+    headers: { "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store", "X-Accel-Buffering": "no" },
+  });
 }
 
 export async function GET() {
