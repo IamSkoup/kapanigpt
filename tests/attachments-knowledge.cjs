@@ -6,7 +6,7 @@ const load = p => fs.readFileSync(path.join(__dirname, "..", p), "utf8");
 const route = load("app/api/chat/route.ts");
 const page = load("app/page.tsx");
 const knowledge = load("lib/knowledge.ts");
-const status = load("app/api/knowledge/route.ts");
+const lore = load("lib/kapani-public-lore.ts");
 const image = load("app/api/image/route.ts");
 
 test("photos reach a real vision model and are validated before the upstream call", () => {
@@ -20,23 +20,24 @@ test("photos reach a real vision model and are validated before the upstream cal
   assert.doesNotMatch(page, /не умеет смотреть изображения/);
 });
 
-test("file snippets are substantially larger, with truncation disclosed", () => {
+test("file snippets are substantial, with truncation disclosed", () => {
   assert.match(page, /a\.text!\.slice\(0, 6000\)/);
   assert.match(page, /фрагмент из/);
   assert.match(route, /message\.content\.slice\(0, i === tail\.length - 1 \? 30000 : 3200\)/);
 });
 
-test("the owner private prompt stays server-side and unavailable rows are visible", () => {
-  assert.match(knowledge, /available: !!setting\?\.value\?\.trim\(\)/);
-  assert.match(knowledge, /chunkParagraph\(part\)/);
-  assert.match(knowledge, /saveMasterPrompt\(value: string\)/);
-  assert.match(status, /process\.env\.KAPANIGPT_OWNER_UID/);
-  assert.match(status, /firebaseUserId === "fb:" \+ ownerUid/);
-  assert.match(status, /!ownerAllowed\(userId\)/);
-  assert.match(status, /getKnowledgeStatus\(\)/);
-  assert.doesNotMatch(status, /Response\.json\(\{[^\n]*text/);
-  assert.doesNotMatch(route, /readPreferences\(account\.userId\)\.catch/);
-  assert.doesNotMatch(page, /if \(!cancelled\) setPreferences\(DEFAULT_PREFERENCES\)/);
+test("Kapani canon is a real bundled system instruction, without DB or upload dependency", () => {
+  assert.match(knowledge, /import \{ PUBLIC_KAPANI_LORE \}/);
+  assert.match(knowledge, /return always \+ "\\n\\n" \+ full/);
+  assert.match(route, /kapaniSystemKnowledge\(question/);
+  assert.match(lore, /Ты — KapaniGPT/);
+  assert.match(lore, /Рыжик/);
+  assert.match(lore, /Лёхин шалаш/);
+  assert.match(lore, /ФУЛИ|Фули/);
+  assert.doesNotMatch(knowledge, /getDb|siteSettings|readMasterPrompt|readPersonalPrompt/);
+  assert.doesNotMatch(page, /knowledgeInfo|KAPANIGPT_OWNER_UID|importKnowledgeFile|knowledgeFileRef/);
+  assert.equal(fs.existsSync(path.join(__dirname, "..", "app/api/knowledge/route.ts")), false);
+  assert.equal(fs.existsSync(path.join(__dirname, "..", "app/api/knowledge/personal/route.ts")), false);
 });
 
 test("SVG illustrations are previewed while raster endpoint is truthful", () => {
