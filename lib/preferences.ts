@@ -7,7 +7,7 @@ export async function readPreferences(userId: string): Promise<UserPreferences> 
   const [row] = await getDb().select().from(userPreferences).where(eq(userPreferences.userId, userId)).limit(1);
   return row ? {
     about: row.about, instructions: row.instructions,
-    tone: row.tone === "direct" || row.tone === "creative" ? row.tone : "balanced",
+    tone: row.tone === "direct" || row.tone === "creative" || row.tone === "rough" ? row.tone : "balanced",
     historyEnabled: row.historyEnabled,
   } : DEFAULT_PREFERENCES;
 }
