@@ -766,6 +766,11 @@ export default function Home() {
                 ? "Закрытая база подключена · " + knowledgeInfo.characters.toLocaleString("ru-RU") + " символов"
                 : "Расширенная база отсутствует на сервере. Ответы о персонажах без неё будут неполными."
                 : "Проверяю состояние закрытой базы знаний…"}</small>
+              {!knowledgeInfo?.canEdit && <small>Для восстановления оригинального канона владельцу нужно указать UID своей учётной записи Firebase в серверной переменной KAPANIGPT_OWNER_UID на Netlify. После этого здесь появится загрузка файла. Если база уже подключена, ничего делать не требуется.</small>}
+              {!knowledgeInfo?.canEdit && auth.currentUser?.uid && <button className="secondary-button"
+                onClick={() => { void navigator.clipboard.writeText(auth.currentUser!.uid).then(() => setKnowledgeMessage("Firebase UID скопирован. Используй его только в настройках своего Netlify-сайта.")); }}>
+                Скопировать UID аккаунта Firebase
+              </button>}
               {knowledgeInfo?.canEdit && <>
                 <input ref={knowledgeFileRef} type="file" accept=".txt,.md,text/plain,text/markdown" hidden onChange={event => {
                   const file = event.target.files?.[0];
