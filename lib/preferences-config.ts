@@ -6,5 +6,5 @@ export type UserPreferences = {
 };
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
-  about: "", instructions: "", tone: "balanced", historyEnabled: true,
+  about: "", instructions: "", tone: "rough", historyEnabled: true,
 };
