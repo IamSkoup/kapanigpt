@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
     const [prefs, knowledge, sources] = await Promise.all([
       readPreferences(account.userId),
       kapaniSystemKnowledge(question, /капан|персонаж|характер|жител|рыжик|вова|дурдом|сюжет|канон/i.test(question)
-        ? 30000 : profile === "kapani-sky" ? 26000 : profile === "kapani-grass" ? 23000 : 19000),
+        ? 30000 : profile === "kapani-sky" ? 26000 : profile === "kapani-grass" ? 23000 : 19000, account.userId),
       isWebQuestion ? searchWeb(question, signal).catch(() => []) : Promise.resolve([]),
     ]);
     const style = prefs.tone === "rough"
