@@ -101,7 +101,7 @@ export default function Home() {
   const [preferences, setPreferences] = useState<UserPreferences>(DEFAULT_PREFERENCES);
   const [settingsTab, setSettingsTab] = useState<"account" | "personal" | "privacy" | "limits" | "appearance">("account");
   const [preferencesSaving, setPreferencesSaving] = useState(false), [preferencesMessage, setPreferencesMessage] = useState("");
-  const [knowledgeInfo, setKnowledgeInfo] = useState<{ available: boolean; characters: number; canEdit: boolean } | null>(null);
+  const [knowledgeInfo, setKnowledgeInfo] = useState<{ available: boolean; characters: number; canEdit: boolean; personalAvailable: boolean; personalCharacters: number } | null>(null);
   const [knowledgeBusy, setKnowledgeBusy] = useState(false), [knowledgeMessage, setKnowledgeMessage] = useState("");
   const [compact, setCompact] = useLocalState("kapani-compact-ui", false);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false), [deletingAll, setDeletingAll] = useState(false);
@@ -116,7 +116,7 @@ export default function Home() {
   const [kapaniBank, setKapaniBank] = useState<KapaniBank | null>(null);
   const [loginNick, setLoginNick] = useState(""), [loginPassword, setLoginPassword] = useState(""), [loggingIn, setLoggingIn] = useState(false), [shopError, setShopError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null), inputRef = useRef<HTMLTextAreaElement>(null), bottomRef = useRef<HTMLDivElement>(null);
-  const knowledgeFileRef = useRef<HTMLInputElement>(null);
+  const knowledgeFileRef = useRef<HTMLInputElement>(null), globalKnowledgeFileRef = useRef<HTMLInputElement>(null);
   const lastAuthUid = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null), activeRef = useRef<string | null>(null), messagesRef = useRef<ChatMessage[]>([]);
   const modelName = MODEL_CHOICES.find(m => m.id === model)?.name || "KapaniGPT 1";
@@ -205,30 +205,45 @@ export default function Home() {
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch("/api/knowledge", { headers: await authorizationHeaders(), cache: "no-store" });
-        if (!response.ok) throw new Error("Состояние закрытой базы недоступно");
-        const info = await response.json() as { available: boolean; characters: number; canEdit: boolean };
-        if (!cancelled) setKnowledgeInfo(info);
+        const headers = await authorizationHeaders();
+        const [sharedResponse, personalResponse] = await Promise.all([
+          fetch("/api/knowledge", { headers, cache: "no-store" }),
+          fetch("/api/knowledge/personal", { headers, cache: "no-store" }),
+        ]);
+        if (!personalResponse.ok) throw new Error("Состояние личной базы недоступно");
+        const personal = await personalResponse.json() as { personalAvailable: boolean; personalCharacters: number };
+        const shared = sharedResponse.ok
+          ? await sharedResponse.json() as { available: boolean; characters: number; canEdit: boolean }
+          : { available: false, characters: 0, canEdit: false };
+        if (!cancelled) setKnowledgeInfo({ ...shared, ...personal });
       } catch { if (!cancelled) setKnowledgeMessage("Не удалось проверить подключение базы знаний."); }
     })();
     return () => { cancelled = true; };
   }, [uid, settingsOpen, settingsTab, authorizationHeaders]);
 
-  async function importKnowledgeFile(file: File) {
+  async function importKnowledgeFile(file: File, scope: "personal" | "shared" = "personal") {
     if (!/\.(txt|md)$/i.test(file.name)) { setKnowledgeMessage("Нужен текстовый файл .txt или .md."); return; }
     if (file.size > 700000) { setKnowledgeMessage("Файл слишком большой."); return; }
     setKnowledgeBusy(true); setKnowledgeMessage("");
     try {
       const raw = await file.text();
-      const response = await fetch("/api/knowledge", {
+      const response = await fetch(scope === "personal" ? "/api/knowledge/personal" : "/api/knowledge", {
         method: "PUT", cache: "no-store",
         headers: { "Content-Type": "application/json", ...await authorizationHeaders() },
         body: JSON.stringify({ text: raw }),
       });
-      const result = await response.json() as { error?: string; available?: boolean; characters?: number; canEdit?: boolean };
+      const result = await response.json() as { error?: string; available?: boolean; characters?: number; personalAvailable?: boolean; personalCharacters?: number };
       if (!response.ok) throw new Error(result.error || "Не удалось обновить базу.");
-      setKnowledgeInfo({ available: !!result.available, characters: result.characters || 0, canEdit: true });
-      setKnowledgeMessage("Закрытая база знаний сохранена. Новые сообщения получат обновлённый контекст.");
+      setKnowledgeInfo(old => ({
+        available: scope === "shared" ? !!result.available : !!old?.available,
+        characters: scope === "shared" ? (result.characters || 0) : (old?.characters || 0),
+        canEdit: !!old?.canEdit,
+        personalAvailable: scope === "personal" ? !!result.personalAvailable : !!old?.personalAvailable,
+        personalCharacters: scope === "personal" ? (result.personalCharacters || 0) : (old?.personalCharacters || 0),
+      }));
+      setKnowledgeMessage(scope === "personal"
+        ? "Полный канон сохранён приватно в твоём аккаунте. Он будет использоваться в новых ответах."
+        : "Общий канон сохранён. Новые ответы будут учитывать его.");
     } catch (error) { setKnowledgeMessage(error instanceof Error ? error.message : "Ошибка загрузки."); }
     finally { setKnowledgeBusy(false); }
   }
@@ -762,23 +777,28 @@ export default function Home() {
             {settingsTab === "account" && <div className="settings-section"><h3>Аккаунт</h3><div className="settings-account-card"><span className="avatar">K</span><div><strong>{auth.currentUser?.displayName || "Пользователь"}</strong><small>{auth.currentUser?.email}</small></div></div>{usage.promoEligible && <div className="opening-offer account-offer"><div className="opening-offer-top"><Gift size={18}/><span>В честь открытия KapaniGPT</span></div><strong>Kapani AI plus на неделю бесплатно</strong><p>Забери подарок один раз. Оплата не нужна.</p><button onClick={claimOpeningPromo} disabled={claimingPromo}>{claimingPromo ? "Активируем…" : "Получить бесплатно"}<ChevronRight size={15}/></button>{promoError && <small className="opening-offer-error">{promoError}</small>}</div>}<div className="settings-row"><div><strong>Подписка</strong><small>{usage.expiresAt ? "До " + new Date(usage.expiresAt).toLocaleDateString("ru-RU") : "Бессрочная бесплатная"}</small></div><span className="settings-value">{tier.name}</span></div>{usage.promoClaimed && usage.promoStartsAt && <div className="settings-row"><div><strong>Подарочная неделя Plus</strong><small>{new Date(usage.promoStartsAt).getTime() > Date.now() ? "Начнётся " + new Date(usage.promoStartsAt).toLocaleDateString("ru-RU") : "Уже получена"}</small></div><span className="settings-value">Использована</span></div>}<button className="settings-plan-button" onClick={() => { setSettingsOpen(false); setShopOpen(true); }}><Crown size={16}/> Подписки и оплата <ChevronRight size={16}/></button>{kapaniSession && <button className="settings-logout" onClick={() => { setKapaniSession(null); setKapaniBank(null); }}>Отключить банк Капаней</button>}<button className="settings-logout" onClick={() => { stopGeneration(); setSettingsOpen(false); signOut(auth).catch(e => setAuthError(e.message)); }}>Выйти из аккаунта</button></div>}
             {settingsTab === "personal" && <div className="settings-section"><h3>Персонализация</h3><div className="knowledge-status">
               <strong>Знания о Капанях</strong>
-              <small>{knowledgeInfo ? knowledgeInfo.available
-                ? "Закрытая база подключена · " + knowledgeInfo.characters.toLocaleString("ru-RU") + " символов"
-                : "Расширенная база отсутствует на сервере. Ответы о персонажах без неё будут неполными."
-                : "Проверяю состояние закрытой базы знаний…"}</small>
-              {!knowledgeInfo?.canEdit && <small>Для восстановления оригинального канона владельцу нужно указать UID своей учётной записи Firebase в серверной переменной KAPANIGPT_OWNER_UID на Netlify. После этого здесь появится загрузка файла. Если база уже подключена, ничего делать не требуется.</small>}
-              {!knowledgeInfo?.canEdit && auth.currentUser?.uid && <button className="secondary-button"
-                onClick={() => { void navigator.clipboard.writeText(auth.currentUser!.uid).then(() => setKnowledgeMessage("Firebase UID скопирован. Используй его только в настройках своего Netlify-сайта.")); }}>
-                Скопировать UID аккаунта Firebase
-              </button>}
+              <small>{knowledgeInfo?.personalAvailable
+                ? "Полная личная база подключена · " + knowledgeInfo.personalCharacters.toLocaleString("ru-RU") + " символов."
+                : knowledgeInfo?.available
+                  ? "Общий авторский канон подключён · " + knowledgeInfo.characters.toLocaleString("ru-RU") + " символов."
+                  : "Встроенная база знаний о Капанях работает, но полный оригинальный канон пока не загружен."}</small>
+              <small>Полную авторскую базу можно сохранить только для своего аккаунта. Настройка UID или переменных Netlify не нужна.</small>
+              <input ref={knowledgeFileRef} type="file" accept=".txt,.md,text/plain,text/markdown" hidden onChange={event => {
+                const file = event.target.files?.[0];
+                if (file) void importKnowledgeFile(file, "personal");
+                event.target.value = "";
+              }}/>
+              <button className="secondary-button" disabled={knowledgeBusy} onClick={() => knowledgeFileRef.current?.click()}>
+                {knowledgeBusy ? "Восстанавливаю базу…" : "Восстановить полный канон в моём аккаунте (.md или .txt)"}
+              </button>
               {knowledgeInfo?.canEdit && <>
-                <input ref={knowledgeFileRef} type="file" accept=".txt,.md,text/plain,text/markdown" hidden onChange={event => {
+                <input ref={globalKnowledgeFileRef} type="file" accept=".txt,.md,text/plain,text/markdown" hidden onChange={event => {
                   const file = event.target.files?.[0];
-                  if (file) void importKnowledgeFile(file);
+                  if (file) void importKnowledgeFile(file, "shared");
                   event.target.value = "";
                 }}/>
-                <button className="secondary-button" disabled={knowledgeBusy} onClick={() => knowledgeFileRef.current?.click()}>
-                  {knowledgeBusy ? "Сохраняю…" : "Загрузить оригинальную базу знаний (.txt или .md)"}
+                <button className="secondary-button" disabled={knowledgeBusy} onClick={() => globalKnowledgeFileRef.current?.click()}>
+                  Обновить общую базу для всех пользователей
                 </button>
               </>}
               {knowledgeMessage && <small className="knowledge-feedback">{knowledgeMessage}</small>}
