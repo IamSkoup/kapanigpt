@@ -21,5 +21,25 @@ test("private canon stays out of Git; restore uses parameterized SQL", () => {
   assert.match(restore, /INSERT INTO ai_site_settings/);
   assert.match(restore, /\[text, Date\.now\(\)\]/);
   assert.match(restore, /ROLLBACK/);
-  assert.match(load("app/page.tsx"), /Скопировать UID аккаунта Firebase/);
+  assert.match(load("app/page.tsx"), /Восстановить полный канон в моём аккаунте/);
+  assert.match(load("app/api/knowledge/personal/route.ts"), /getFirebaseUserId\(request\)/);
+  assert.match(load("app/api/knowledge/personal/route.ts"), /savePersonalKnowledge\(userId, body\.text\)/);
+  assert.match(load("lib/knowledge.ts"), /createHash\("sha256"\)/);
+});
+
+test("rough is the default including legacy balanced, while explicit balanced stays available", () => {
+  assert.match(load("lib/preferences-config.ts"), /tone: "rough", historyEnabled: true/);
+  assert.match(load("lib/preferences.ts"), /row\.tone === "plain" \? "balanced"/);
+  assert.match(load("lib/preferences.ts"), /input\.tone === "balanced" \? "plain"/);
+});
+
+test("public non-sensitive Kapani lore works before private restoration", () => {
+  const lore = load("lib/kapani-public-lore.ts");
+  const knowledge = load("lib/knowledge.ts");
+  assert.match(lore, /Рыжик/);
+  assert.match(lore, /Вова/);
+  assert.match(lore, /Контролёр/);
+  assert.match(knowledge, /const fallback = PUBLIC_KAPANI_LORE/);
+  assert.match(knowledge, /personal\?\.available \? personal : shared!/);
+  assert.match(knowledge, /getPersonalKnowledgeStatus\(userId: string\)/);
 });
