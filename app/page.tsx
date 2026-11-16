@@ -101,8 +101,6 @@ export default function Home() {
   const [preferences, setPreferences] = useState<UserPreferences>(DEFAULT_PREFERENCES);
   const [settingsTab, setSettingsTab] = useState<"account" | "personal" | "privacy" | "limits" | "appearance">("account");
   const [preferencesSaving, setPreferencesSaving] = useState(false), [preferencesMessage, setPreferencesMessage] = useState("");
-  const [knowledgeInfo, setKnowledgeInfo] = useState<{ available: boolean; characters: number; canEdit: boolean; personalAvailable: boolean; personalCharacters: number } | null>(null);
-  const [knowledgeBusy, setKnowledgeBusy] = useState(false), [knowledgeMessage, setKnowledgeMessage] = useState("");
   const [compact, setCompact] = useLocalState("kapani-compact-ui", false);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false), [deletingAll, setDeletingAll] = useState(false);
   const [thinkingStatus, setThinkingStatus] = useState("Думаю…");
@@ -116,7 +114,6 @@ export default function Home() {
   const [kapaniBank, setKapaniBank] = useState<KapaniBank | null>(null);
   const [loginNick, setLoginNick] = useState(""), [loginPassword, setLoginPassword] = useState(""), [loggingIn, setLoggingIn] = useState(false), [shopError, setShopError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null), inputRef = useRef<HTMLTextAreaElement>(null), bottomRef = useRef<HTMLDivElement>(null);
-  const knowledgeFileRef = useRef<HTMLInputElement>(null), globalKnowledgeFileRef = useRef<HTMLInputElement>(null);
   const lastAuthUid = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null), activeRef = useRef<string | null>(null), messagesRef = useRef<ChatMessage[]>([]);
   const modelName = MODEL_CHOICES.find(m => m.id === model)?.name || "KapaniGPT 1";
@@ -200,54 +197,6 @@ export default function Home() {
     })();
     return () => { cancelled = true; };
   }, [uid, authorizationHeaders]);
-  useEffect(() => {
-    if (!uid || !settingsOpen || settingsTab !== "personal") return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const headers = await authorizationHeaders();
-        const [sharedResponse, personalResponse] = await Promise.all([
-          fetch("/api/knowledge", { headers, cache: "no-store" }),
-          fetch("/api/knowledge/personal", { headers, cache: "no-store" }),
-        ]);
-        if (!personalResponse.ok) throw new Error("Состояние личной базы недоступно");
-        const personal = await personalResponse.json() as { personalAvailable: boolean; personalCharacters: number };
-        const shared = sharedResponse.ok
-          ? await sharedResponse.json() as { available: boolean; characters: number; canEdit: boolean }
-          : { available: false, characters: 0, canEdit: false };
-        if (!cancelled) setKnowledgeInfo({ ...shared, ...personal });
-      } catch { if (!cancelled) setKnowledgeMessage("Не удалось проверить подключение базы знаний."); }
-    })();
-    return () => { cancelled = true; };
-  }, [uid, settingsOpen, settingsTab, authorizationHeaders]);
-
-  async function importKnowledgeFile(file: File, scope: "personal" | "shared" = "personal") {
-    if (!/\.(txt|md)$/i.test(file.name)) { setKnowledgeMessage("Нужен текстовый файл .txt или .md."); return; }
-    if (file.size > 700000) { setKnowledgeMessage("Файл слишком большой."); return; }
-    setKnowledgeBusy(true); setKnowledgeMessage("");
-    try {
-      const raw = await file.text();
-      const response = await fetch(scope === "personal" ? "/api/knowledge/personal" : "/api/knowledge", {
-        method: "PUT", cache: "no-store",
-        headers: { "Content-Type": "application/json", ...await authorizationHeaders() },
-        body: JSON.stringify({ text: raw }),
-      });
-      const result = await response.json() as { error?: string; available?: boolean; characters?: number; personalAvailable?: boolean; personalCharacters?: number };
-      if (!response.ok) throw new Error(result.error || "Не удалось обновить базу.");
-      setKnowledgeInfo(old => ({
-        available: scope === "shared" ? !!result.available : !!old?.available,
-        characters: scope === "shared" ? (result.characters || 0) : (old?.characters || 0),
-        canEdit: !!old?.canEdit,
-        personalAvailable: scope === "personal" ? !!result.personalAvailable : !!old?.personalAvailable,
-        personalCharacters: scope === "personal" ? (result.personalCharacters || 0) : (old?.personalCharacters || 0),
-      }));
-      setKnowledgeMessage(scope === "personal"
-        ? "Полный канон сохранён приватно в твоём аккаунте. Он будет использоваться в новых ответах."
-        : "Общий канон сохранён. Новые ответы будут учитывать его.");
-    } catch (error) { setKnowledgeMessage(error instanceof Error ? error.message : "Ошибка загрузки."); }
-    finally { setKnowledgeBusy(false); }
-  }
-
   async function persistPreferences() {
     setPreferencesSaving(true); setPreferencesMessage("");
     try {
@@ -775,34 +724,7 @@ export default function Home() {
           </nav>
           <div className="settings-content">
             {settingsTab === "account" && <div className="settings-section"><h3>Аккаунт</h3><div className="settings-account-card"><span className="avatar">K</span><div><strong>{auth.currentUser?.displayName || "Пользователь"}</strong><small>{auth.currentUser?.email}</small></div></div>{usage.promoEligible && <div className="opening-offer account-offer"><div className="opening-offer-top"><Gift size={18}/><span>В честь открытия KapaniGPT</span></div><strong>Kapani AI plus на неделю бесплатно</strong><p>Забери подарок один раз. Оплата не нужна.</p><button onClick={claimOpeningPromo} disabled={claimingPromo}>{claimingPromo ? "Активируем…" : "Получить бесплатно"}<ChevronRight size={15}/></button>{promoError && <small className="opening-offer-error">{promoError}</small>}</div>}<div className="settings-row"><div><strong>Подписка</strong><small>{usage.expiresAt ? "До " + new Date(usage.expiresAt).toLocaleDateString("ru-RU") : "Бессрочная бесплатная"}</small></div><span className="settings-value">{tier.name}</span></div>{usage.promoClaimed && usage.promoStartsAt && <div className="settings-row"><div><strong>Подарочная неделя Plus</strong><small>{new Date(usage.promoStartsAt).getTime() > Date.now() ? "Начнётся " + new Date(usage.promoStartsAt).toLocaleDateString("ru-RU") : "Уже получена"}</small></div><span className="settings-value">Использована</span></div>}<button className="settings-plan-button" onClick={() => { setSettingsOpen(false); setShopOpen(true); }}><Crown size={16}/> Подписки и оплата <ChevronRight size={16}/></button>{kapaniSession && <button className="settings-logout" onClick={() => { setKapaniSession(null); setKapaniBank(null); }}>Отключить банк Капаней</button>}<button className="settings-logout" onClick={() => { stopGeneration(); setSettingsOpen(false); signOut(auth).catch(e => setAuthError(e.message)); }}>Выйти из аккаунта</button></div>}
-            {settingsTab === "personal" && <div className="settings-section"><h3>Персонализация</h3><div className="knowledge-status">
-              <strong>Знания о Капанях</strong>
-              <small>{knowledgeInfo?.personalAvailable
-                ? "Полная личная база подключена · " + knowledgeInfo.personalCharacters.toLocaleString("ru-RU") + " символов."
-                : knowledgeInfo?.available
-                  ? "Общий авторский канон подключён · " + knowledgeInfo.characters.toLocaleString("ru-RU") + " символов."
-                  : "Встроенная база знаний о Капанях работает, но полный оригинальный канон пока не загружен."}</small>
-              <small>Полную авторскую базу можно сохранить только для своего аккаунта. Настройка UID или переменных Netlify не нужна.</small>
-              <input ref={knowledgeFileRef} type="file" accept=".txt,.md,text/plain,text/markdown" hidden onChange={event => {
-                const file = event.target.files?.[0];
-                if (file) void importKnowledgeFile(file, "personal");
-                event.target.value = "";
-              }}/>
-              <button className="secondary-button" disabled={knowledgeBusy} onClick={() => knowledgeFileRef.current?.click()}>
-                {knowledgeBusy ? "Восстанавливаю базу…" : "Восстановить полный канон в моём аккаунте (.md или .txt)"}
-              </button>
-              {knowledgeInfo?.canEdit && <>
-                <input ref={globalKnowledgeFileRef} type="file" accept=".txt,.md,text/plain,text/markdown" hidden onChange={event => {
-                  const file = event.target.files?.[0];
-                  if (file) void importKnowledgeFile(file, "shared");
-                  event.target.value = "";
-                }}/>
-                <button className="secondary-button" disabled={knowledgeBusy} onClick={() => globalKnowledgeFileRef.current?.click()}>
-                  Обновить общую базу для всех пользователей
-                </button>
-              </>}
-              {knowledgeMessage && <small className="knowledge-feedback">{knowledgeMessage}</small>}
-            </div><p className="settings-intro">KapaniGPT учтёт твои предпочтения во всех новых ответах.</p><label className="settings-field">Что ИИ стоит знать о тебе<textarea rows={4} maxLength={1500} value={preferences.about} onChange={e => setPreferences(old => ({ ...old, about: e.target.value }))} placeholder="Интересы, занятия, контекст…"/></label><label className="settings-field">Как лучше отвечать<textarea rows={4} maxLength={3000} value={preferences.instructions} onChange={e => setPreferences(old => ({ ...old, instructions: e.target.value }))} placeholder="Тон, длина ответов, любимый стиль…"/></label><label className="settings-field">Манера общения<select value={preferences.tone} onChange={e => setPreferences(old => ({ ...old, tone: e.target.value as UserPreferences["tone"] }))}><option value="balanced">Обычная</option><option value="direct">Коротко и прямо</option><option value="creative">Творческая</option><option value="rough">Дерзкая, с матами</option></select></label></div>}
+            {settingsTab === "personal" && <div className="settings-section"><h3>Персонализация</h3><p className="settings-intro">KapaniGPT учтёт твои предпочтения во всех новых ответах.</p><label className="settings-field">Что ИИ стоит знать о тебе<textarea rows={4} maxLength={1500} value={preferences.about} onChange={e => setPreferences(old => ({ ...old, about: e.target.value }))} placeholder="Интересы, занятия, контекст…"/></label><label className="settings-field">Как лучше отвечать<textarea rows={4} maxLength={3000} value={preferences.instructions} onChange={e => setPreferences(old => ({ ...old, instructions: e.target.value }))} placeholder="Тон, длина ответов, любимый стиль…"/></label><label className="settings-field">Манера общения<select value={preferences.tone} onChange={e => setPreferences(old => ({ ...old, tone: e.target.value as UserPreferences["tone"] }))}><option value="balanced">Обычная</option><option value="direct">Коротко и прямо</option><option value="creative">Творческая</option><option value="rough">Дерзкая, с матами</option></select></label></div>}
             {settingsTab === "privacy" && <div className="settings-section"><h3>Конфиденциальность</h3><div className="settings-row"><div><strong>Сохранять историю чатов</strong><small>Если выключить, новые сообщения останутся только до перезагрузки страницы. Старые чаты не удаляются.</small></div><button role="switch" aria-checked={preferences.historyEnabled} className={"settings-toggle " + (preferences.historyEnabled ? "on" : "")} onClick={() => setPreferences(old => ({ ...old, historyEnabled: !old.historyEnabled }))}><span/></button></div><div className="settings-row"><div><strong>Удалить сохранённые чаты</strong><small>Все диалоги и сообщения из Firebase. Восстановить нельзя.</small></div><button className="settings-danger" onClick={() => setConfirmDeleteAll(true)}>Удалить</button></div><div className="privacy-note"><ShieldCheck size={17}/><p>Тексты, файлы и прикреплённые изображения передаются внешнему ИИ-провайдеру для обработки. Бесплатный провайдер может сохранять данные для улучшения своих моделей. Не прикрепляй конфиденциальные документы, личные фотографии других людей и пароли. Выключение истории отключает хранение в KapaniGPT, но не обработку у провайдера.</p></div></div>}
             {settingsTab === "limits" && <div className="settings-section"><h3>Общие лимиты</h3><p className="settings-intro">Один запас на «Чат» и «Работу». Чат тратит всего 1–3 единицы, работа расходует больше в зависимости от модели и рассуждений.</p><div className="quota-card"><div className="quota-heading"><Zap size={16}/><strong>Общий лимит · {tier.name}</strong></div><div className="quota-line"><span>На 5 часов</span><b>{usage.remainingFiveHourPercent}% осталось</b></div><div className="limit-track"><span style={{ width: usage.remainingFiveHourPercent + "%" }}/></div><small>Всего {usage.fiveHourBudget} единиц</small><div className="quota-line"><span>На неделю</span><b>{usage.remainingPercent}% осталось</b></div><div className="limit-track"><span style={{ width: usage.remainingPercent + "%" }}/></div><small>Всего {usage.weeklyBudget} единиц</small></div><div className="quota-card token-quota"><div className="quota-heading"><Wallet size={16}/><strong>Купленные токены</strong></div><div className="token-quota-amount">{usage.tokensBalance.toLocaleString("ru-RU")}</div><p className="settings-intro">Не сгорают. После окончания лимита списываются автоматически, при ошибке модели возвращаются.</p><button className="settings-plan-button" onClick={() => { setSettingsOpen(false); setShopTab("tokens"); setShopOpen(true); }}><Zap size={16}/> Купить токены <ChevronRight size={16}/></button></div><p className="settings-intro">Пятичасовой лимит обновится {usage.fiveHourResetsAt ? new Date(usage.fiveHourResetsAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "скоро"}. У ИИ-провайдера есть собственные ограничения нагрузки.</p><button className="settings-plan-button" onClick={() => { setSettingsOpen(false); setShopTab("plans"); setShopOpen(true); }}><Crown size={16}/> Сменить тариф <ChevronRight size={16}/></button></div>}
             {settingsTab === "appearance" && <div className="settings-section"><h3>Интерфейс</h3><div className="settings-row"><div><strong>Компактный режим</strong><small>Меньше отступов и декоративных элементов.</small></div><button role="switch" aria-checked={compact} className={"settings-toggle " + (compact ? "on" : "")} onClick={() => setCompact(!compact)}><span/></button></div><div className="settings-row"><div><strong>Цветовая схема</strong><small>Тёмная основа, зелёные градиенты.</small></div><span className="settings-value">Чёрно-зелёная</span></div></div>}
