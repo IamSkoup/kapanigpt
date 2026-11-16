@@ -20,7 +20,7 @@ export async function PUT(request: NextRequest) {
     const data = await request.json() as Partial<UserPreferences>;
     if (typeof data.about !== "string" || data.about.length > 1500 ||
         typeof data.instructions !== "string" || data.instructions.length > 3000 ||
-        !["balanced", "direct", "creative"].includes(data.tone || "") ||
+        !["balanced", "direct", "creative", "rough"].includes(data.tone || "") ||
         typeof data.historyEnabled !== "boolean") {
       return Response.json({ error: "Некорректные параметры персонализации." }, { status: 400 });
     }
