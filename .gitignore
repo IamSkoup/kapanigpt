@@ -43,3 +43,9 @@ yarn-error.log*
 
 # OS metadata
 .DS_Store
+
+# Never commit owner private knowledge or database recovery exports
+/KAPANIGPT_MASTER_PROMPT*.md
+/**/KAPANIGPT_MASTER_PROMPT*.md
+/*private*restore*.sql
+/**/*private*restore*.sql
