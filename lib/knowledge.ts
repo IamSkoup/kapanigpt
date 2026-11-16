@@ -1,13 +1,56 @@
 import { getDb } from "@/db";
 import { siteSettings } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { PUBLIC_KAPANI_LORE } from "@/lib/kapani-public-lore";
 
-const fallback = `Расширенная закрытая база знаний о Капанях сейчас не найдена в базе данных KapaniGPT.
-Не выдумывай имена, биографии, события и якобы знакомые тебе подробности. Если вопрос касается сведений из этой базы, честно скажи, что её необходимо восстановить из оригинала.`;
+// This is only a public, fictional, privacy-safe summary, not the full owner manuscript.
+const fallback = PUBLIC_KAPANI_LORE;
 
 // Private owner knowledge belongs in the server-side database, never public Git.
 type Knowledge = { text: string; available: boolean; updatedAt: number | null; expiresAt: number };
 let promptCache: Knowledge | null = null;
+const perUserCache = new Map<string, Knowledge>();
+
+// Only verified Firebase identities may reference their own private knowledge.
+function personalKey(userId: string) {
+  return "user_kb_" + createHash("sha256").update(userId).digest("hex");
+}
+
+async function readPersonalPrompt(userId: string): Promise<Knowledge> {
+  const key = personalKey(userId);
+  const cached = perUserCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached;
+  const [setting] = await getDb().select({
+    value: siteSettings.value, updatedAt: siteSettings.updatedAt,
+  }).from(siteSettings).where(eq(siteSettings.key, key)).limit(1);
+  const result: Knowledge = {
+    text: setting?.value?.trim() || "",
+    available: !!setting?.value?.trim(),
+    updatedAt: setting?.updatedAt ?? null,
+    expiresAt: Date.now() + 30_000,
+  };
+  if (perUserCache.size > 100) perUserCache.clear();
+  perUserCache.set(key, result);
+  return result;
+}
+
+export async function getPersonalKnowledgeStatus(userId: string) {
+  const knowledge = await readPersonalPrompt(userId);
+  return { available: knowledge.available,
+    characters: knowledge.available ? knowledge.text.length : 0,
+    updatedAt: knowledge.updatedAt };
+}
+
+export async function savePersonalKnowledge(userId: string, value: string) {
+  const text = value.trim();
+  if (text.length < 100 || text.length > 180000) throw new Error("Нужен текст канона от 100 до 180000 символов.");
+  const key = personalKey(userId);
+  const updatedAt = Date.now();
+  await getDb().insert(siteSettings).values({ key, value: text, updatedAt })
+    .onConflictDoUpdate({ target: siteSettings.key, set: { value: text, updatedAt } });
+  perUserCache.set(key, { text, available: true, updatedAt, expiresAt: Date.now() + 30_000 });
+}
 
 async function readMasterPrompt(): Promise<Knowledge> {
   if (promptCache && promptCache.expiresAt > Date.now()) return promptCache;
@@ -64,10 +107,20 @@ function chunkParagraph(text: string, max = 2400) {
   return chunks;
 }
 
-export async function kapaniSystemKnowledge(question: string, budget = 22000) {
-  const knowledge = await readMasterPrompt();
-  if (!knowledge.available) return fallback;
-  const paragraphs = knowledge.text.split(/\n\s*\n/g).map(part => part.trim())
+export async function kapaniSystemKnowledge(question: string, budget = 22000, userId?: string) {
+  const personal = userId ? await readPersonalPrompt(userId) : null;
+  const shared = personal?.available ? null : await readMasterPrompt();
+  const selectedSource = personal?.available ? personal : shared!;
+  const sourceLabel = personal?.available ? "Приватный авторский канон пользователя"
+    : shared?.available ? "Закрытая общая база владельца"
+    : "Встроенный краткий справочник художественного мира Капаней";
+  // Old manuscript contained invented UI plans/model switches. They are no
+  // longer live product instructions, so only its creative canon is retained.
+  const cleanText = selectedSource.text.includes("MASTER SYSTEM PROMPT")
+    ? selectedSource.text.split(/(?=^## \d+\. )/gm)
+      .filter(section => !/^## (?:[1-6]|134)\./.test(section))
+      .join("\n\n") : selectedSource.text;
+  const paragraphs = cleanText.split(/\n\s*\n/g).map(part => part.trim())
     .filter(Boolean).flatMap(part => chunkParagraph(part));
   const identity = paragraphs.slice(0, 5).join("\n\n").slice(0, 6500);
   const terms = Array.from(new Set((question.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) || [])
@@ -94,5 +147,5 @@ export async function kapaniSystemKnowledge(question: string, budget = 22000) {
     remaining -= candidate.paragraph.length + 2;
   }
   selected.sort((a, b) => a.i - b.i);
-  return `Внутренняя база знаний KapaniGPT, предоставленная владельцем. Сохраняй канон и имена; не выдавай художественные истории за независимо проверенные факты. По запросам о Капанях используй именно эти сведения, а не общие догадки.\n\n${identity}\n\n${selected.map(item => item.paragraph).join("\n\n")}`;
+  return `${sourceLabel}. Сохраняй канон и имена; не выдавай художественные истории за независимо проверенные факты. По запросам о Капанях используй именно эти сведения, а не общие догадки. Если это встроенный краткий справочник, не утверждай, что знаешь полную закрытую базу.\n\n${identity}\n\n${selected.map(item => item.paragraph).join("\n\n")}`;
 }
