@@ -1,7 +1,7 @@
 export type UserPreferences = {
   about: string;
   instructions: string;
-  tone: "balanced" | "direct" | "creative";
+  tone: "balanced" | "direct" | "creative" | "rough";
   historyEnabled: boolean;
 };
 
