@@ -1,0 +1,45 @@
+name: Deploy KapaniGPT to Netlify
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/netlify-production.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kapanigpt-netlify-production
+  cancel-in-progress: false
+
+jobs:
+  production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify existing deployment credentials
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        shell: bash
+        run: |
+          if [[ -z "$NETLIFY_AUTH_TOKEN" || -z "$NETLIFY_SITE_ID" ]]; then
+            echo "::error::Netlify production deployment is not connected to GitHub Actions. Both NETLIFY_AUTH_TOKEN and NETLIFY_SITE_ID must already be configured in repository secrets."
+            exit 1
+          fi
+          echo "Netlify deployment credentials are configured."
+      - name: Deploy checked-out main source to existing Netlify production site
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          CI: "true"
+        run: |
+          npx --yes netlify-cli@latest deploy --remote --prod --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --message "KapaniGPT main ${GITHUB_SHA}"
