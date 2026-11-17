@@ -19,7 +19,7 @@ const REASONING_LEVELS = new Set(["off", "light", "medium", "high", "very-high",
 type UserImage = { name?: string; data: string };
 type ChatMessage = { role: "user" | "assistant" | "system"; content: string; images?: UserImage[] };
 
-function profileInstruction(profile: string, reasoning: Reasoning, canSendFiles: boolean) {
+function profileInstruction(profile: string, reasoning: Reasoning, canSendFiles: boolean, underlyingModel: string) {
   const profileText = profile === "lion-1"
     ? "Ты работаешь в профиле lion 1: приоритет — код, логика, проверка условий и крайних случаев; допускается более долгий анализ."
     : profile === "leopard-1"
@@ -29,7 +29,7 @@ function profileInstruction(profile: string, reasoning: Reasoning, canSendFiles:
   const reasoningText = reasoning === "off" ? "Сразу дай ответ."
     : `Глубина рассуждения: ${depth[reasoning]}. Перед основным ответом добавь блок <fedya_reason> с кратким понятным пользователю объяснением подхода, проверок и неопределённостей. Это краткое объяснение результата, не дословная запись скрытого внутреннего рассуждения. </fedya_reason>`;
   const files = canSendFiles ? 'Если пользователь просит файл для скачивания, можешь отправить до четырёх текстовых файлов блоками <kapani_file name="имя.ext">содержимое</kapani_file>. Доступны txt, md, html, css, js, ts, tsx, jsx, json, csv, py, svg, xml, sql, yaml. Для изображений доступен только SVG; не обещай бинарные форматы.' : "На этом тарифе отправка файлов в чате недоступна; ответь текстом.";
-  return `Ты — FedyaGPT. ${profileText} ${reasoningText} Общайся прямо, с характером, без сюсюканья и искусственных вступлений. По умолчанию допустимы уместные маты и резкие формулировки, но не теряй содержание и подстраивайся под просьбу пользователя; в чувствительных ситуациях отвечай бережно. Следуй фактам из базы о Капанях, но устаревшие названия продукта и правила тарифов в ней не действуют. ${files} Если спрашивают о технической основе, честно сообщи, что ответы генерирует внешний провайдер; не утверждай, будто эти профили являются отдельными собственными обученными моделями. Не выдумывай факты. Отвечай на языке пользователя.`;
+  return `Ты — FedyaGPT. ${profileText} ${reasoningText} Общайся прямо, с характером, без сюсюканья и искусственных вступлений. По умолчанию допустимы уместные маты и резкие формулировки, но не теряй содержание и подстраивайся под просьбу пользователя; в чувствительных ситуациях отвечай бережно. Следуй фактам из базы о Капанях, но устаревшие названия продукта и правила тарифов в ней не действуют. ${files} Если спрашивают о технической основе, честно сообщи, что ответы генерирует внешний провайдер; техническая основа текущего запроса — ${underlyingModel}. Для чата с автовыбором точная базовая модель может меняться. Не утверждай, будто профили являются отдельно обученными собственными моделями. Не выдумывай факты. Отвечай на языке пользователя.`;
 }
 
 function reasoningEffort(reasoning: Reasoning) {
@@ -90,7 +90,8 @@ export async function POST(request: NextRequest) {
       : prefs.tone === "direct" ? "Пиши кратко, прямо и по делу."
       : prefs.tone === "creative" ? "Отвечай изобретательно и точно." : "Подстраивай подробность под запрос.";
     const personalization = `\n\nНастройки пользователя. ${style}\nО пользователе: ${prefs.about.slice(0, 1000)}\nПредпочтения ответа: ${prefs.instructions.slice(0, 1600)}`;
-    const system = knowledge + "\n\n" + profileInstruction(profile, reasoning, account.plan !== "free") + personalization
+    const system = knowledge + "\n\n" + profileInstruction(profile, reasoning, account.plan !== "free",
+      mode === "work" ? providerModel : "автоматически выбираемая сторонняя модель") + personalization
       + (sources.length ? webContext(sources)
         : isWebQuestion ? "\n\nПоиск не предоставил источников. Не утверждай, что проверил интернет." : "");
     const history: ChatMessage[] = [
