@@ -11,7 +11,7 @@ import { type GeneratedFile } from "@/lib/response-files";
 
 type Attachment = { name: string; type: string; size: number; data?: string; text?: string };
 type WebSource = { title: string; url: string; snippet: string };
-type ChatMessage = { reasoningSummary?: string; id: string; role: "user" | "assistant"; content: string; createdAt: number; attachments?: Attachment[]; generatedFiles?: GeneratedFile[]; sources?: WebSource[] };
+type ChatMessage = { reasoningSummary?: string; providerModel?: string; elapsedMs?: number; id: string; role: "user" | "assistant"; content: string; createdAt: number; attachments?: Attachment[]; generatedFiles?: GeneratedFile[]; sources?: WebSource[] };
 type Chat = { id: string; title: string; updatedAt: number; pinned?: boolean; mode: ChatMode };
 const DEFAULT_MODEL = "serval-1";
 type Usage = { plan: Plan; providerConfigured: boolean; remainingPercent: number; remainingFiveHourPercent: number; fiveHourBudget: number; weeklyBudget: number; tokensBalance: number; fiveHourResetsAt: number; imagesLeft: number; imagesMax: number; nickname: string | null; balance: number | null; expiresAt: string | null; promoEligible: boolean; promoClaimed: boolean; promoStartsAt: string | null; promoExpiresAt: string | null };
@@ -404,22 +404,25 @@ export default function Home() {
     let complete = "";
     let generatedFiles: GeneratedFile[] = [];
     let reasoningSummary = "";
+    let providerModel = "", elapsedMs = 0;
     let sources: WebSource[] = [];
     try {
       const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...await authorizationHeaders() }, body: JSON.stringify({ messages: prior, mode: chatMode, model: chatMode === "work" ? model : DEFAULT_MODEL, reasoning }), signal: controller.signal });
       if (!response.ok) { const data = await response.json().catch(() => ({})) as { error?: string }; throw new Error(data.error || "Ошибка сервера " + response.status); }
-      const initial = await response.json() as { error?: string; usage?: Usage; choices?: Array<{ message?: { content?: string; files?: GeneratedFile[]; sources?: WebSource[]; reasoningSummary?: string } }> };
+      const initial = await response.json() as { error?: string; usage?: Usage; choices?: Array<{ message?: { content?: string; files?: GeneratedFile[]; sources?: WebSource[]; reasoningSummary?: string; providerModel?: string; elapsedMs?: number } }> };
       if (initial.error) throw new Error(initial.error);
        if (initial.usage) setUsage(initial.usage);
       complete = initial.choices?.[0]?.message?.content || "";
       generatedFiles = initial.choices?.[0]?.message?.files || [];
       sources = initial.choices?.[0]?.message?.sources || [];
       reasoningSummary = initial.choices?.[0]?.message?.reasoningSummary || "";
+      providerModel = initial.choices?.[0]?.message?.providerModel || "";
+      elapsedMs = initial.choices?.[0]?.message?.elapsedMs || 0;
       if (!complete.trim() && !generatedFiles.length) throw new Error("Модель вернула пустой ответ. Попробуй другую модель.");
     } catch (e) { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Ошибка генерации."); }
     finally {
       if (complete.trim() || generatedFiles.length) {
-        const assistantMessage: ChatMessage = { id: makeId(), role: "assistant", content: complete, generatedFiles, sources, reasoningSummary, createdAt: Date.now() + 1 };
+        const assistantMessage: ChatMessage = { id: makeId(), role: "assistant", content: complete, generatedFiles, sources, reasoningSummary, providerModel, elapsedMs, createdAt: Date.now() + 1 };
         if (saveHistory) {
           try { await setDoc(doc(database, "users", uid, "chats", currentChat, "messages", assistantMessage.id), assistantMessage); } catch {}
         } else {
@@ -547,6 +550,7 @@ export default function Home() {
               <button className="message-edit-save" disabled={messageBusy || !editingMessageText.trim()} onClick={() => submitMessageEdit(m, laterCount)}><Check size={14}/> Сохранить</button></div>
           </div> : m.content && <div className={m.role === "user" ? "user-bubble" : "assistant-copy"}>{m.role === "user" ? m.content : renderText(m.content)}</div>}
           {m.role === "assistant" && !!m.reasoningSummary && <details className="reasoning-summary"><summary>Как я подошёл к ответу</summary><div>{renderText(m.reasoningSummary)}</div></details>}
+          {m.role === "assistant" && !!m.providerModel && <div className="response-meta">{m.providerModel === "kilo-auto/free" ? "Автовыбор" : m.providerModel.split("/").pop()?.replace(":free", "")} · ответ за {(m.elapsedMs! / 1000).toFixed(1)} с</div>}
           {!!m.sources?.length && <div className="web-sources"><strong>Источники из интернета</strong><div>{m.sources.map((source, i) => <a key={i} href={source.url} target="_blank" rel="noopener noreferrer" title={source.snippet}><span>[{i + 1}]</span> {source.title}</a>)}</div></div>}
           {!!m.generatedFiles?.length && m.generatedFiles.some(file => file.mime === "image/svg+xml") &&
             <div className="svg-previews">{m.generatedFiles.filter(file => file.mime === "image/svg+xml").map((file, i) =>

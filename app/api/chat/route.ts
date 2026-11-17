@@ -10,6 +10,11 @@ export const runtime = "nodejs";
 // The upstream gateway is accessed only from the server.
 const CHAT_ENDPOINT = "https://ai-gateway.kilo.ai/api/v1/chat/completions";
 const ALLOWED_MODELS = new Set(["serval-1", "leopard-1", "lion-1"]);
+const WORK_PROVIDER_MODELS: Record<string, string> = {
+  "serval-1": "liquid/lfm-3-1.7b:free",
+  "leopard-1": "baidu/ernie-5.5-flash-preview:free",
+  "lion-1": "cohere/north-mini-code:free",
+};
 const REASONING_LEVELS = new Set(["off", "light", "medium", "high", "very-high", "maximum"]);
 type UserImage = { name?: string; data: string };
 type ChatMessage = { role: "user" | "assistant" | "system"; content: string; images?: UserImage[] };
@@ -70,6 +75,7 @@ export async function POST(request: NextRequest) {
   const aborted = new AbortController();
   const signal = AbortSignal.any([request.signal, aborted.signal]);
   const encoder = new TextEncoder();
+  const providerModel = mode === "work" ? WORK_PROVIDER_MODELS[profile] : "kilo-auto/free";
 
   async function generate() {
     // Fetch independent data in parallel instead of serial database round trips.
@@ -104,15 +110,17 @@ export async function POST(request: NextRequest) {
     }));
     // A verified free vision-capable Kilo model receives image_url data parts.
     // Auto Free handles ordinary text, and never receives image bytes.
+    const selectedModel = hasImages ? "nvidia/nemotron-3.5-super-vl:free" : providerModel;
     const requestBody = JSON.stringify({
-      model: hasImages ? "nvidia/nemotron-3.5-super-vl:free" : "kilo-auto/free",
+      model: selectedModel,
       messages: providerMessages,
       max_tokens: reasoning === "maximum" ? 2400 : profile === "lion-1" ? 1950
         : profile === "leopard-1" ? 1650 : 1250,
       ...(hasImages ? {} : { reasoning_effort: reasoningEffort(reasoning) }),
       stream: false,
     });
-    let answer = "";
+    let answer = "", actualModel = selectedModel;
+    const startedAt = Date.now();
     for (let attempt = 0; attempt < 2; attempt++) {
       const response = await fetch(CHAT_ENDPOINT, {
         method: "POST",
@@ -131,8 +139,9 @@ export async function POST(request: NextRequest) {
           ? "Бесплатные модели перегружены. Попробуй чуть позже. Лимит не списан."
           : `Шлюз нейросети вернул ошибку ${response.status}. Лимит не списан.`);
       }
-      const data = await response.json() as { choices?: Array<{ message?: { content?: string | null } }> };
+      const data = await response.json() as { model?: string; choices?: Array<{ message?: { content?: string | null } }> };
       answer = data.choices?.[0]?.message?.content?.trim() || "";
+      actualModel = data.model || selectedModel;
       break;
     }
     if (!answer) throw new Error("Модель не вернула ответ. Лимит не списан.");
@@ -153,7 +162,8 @@ export async function POST(request: NextRequest) {
     if (!(mode === "chat" && ["ultra", "max", "prime"].includes(account.plan)))
       await spendUsage(account, "text", cost);
     return { choices: [{ message: { role: "assistant", content: generated.text,
-      files: generated.files, reasoningSummary, sources } }] };
+      files: generated.files, reasoningSummary, providerModel: actualModel,
+      elapsedMs: Date.now() - startedAt, sources } }] };
   }
 
   // Flush response headers immediately: Netlify can return a platform 502

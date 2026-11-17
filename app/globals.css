@@ -825,6 +825,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .reasoning-summary { margin: 11px 0 13px; padding: 10px 13px; border: 1px solid #315840; border-radius: 11px; background: #14251a; color: #b8d4c0; font-size: 12px; line-height: 1.6; }
 .reasoning-summary summary { cursor: pointer; font-weight: 650; color: #91d7a7; }
 .reasoning-summary > div { margin-top: 8px; }
+.response-meta { margin: 7px 0 12px; color: #789886; font-size: 10px; }
+.theme-light .response-meta { color: #5d7c65; }
 .reasoning-panel input[type="range"] { touch-action: pan-x; }
 .reasoning-panel input[type="range"]::-webkit-slider-thumb { transition: transform .15s ease, box-shadow .15s ease; }
 .settings-row select { background: #102017; border: 1px solid #3d7850; color: #d8f5e0; border-radius: 9px; padding: 9px; }
