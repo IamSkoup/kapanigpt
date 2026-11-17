@@ -43,6 +43,17 @@ export const subscriptionCheckouts = pgTable("ai_subscription_checkouts", {
   expiresAt: millis("expires_at"),
 });
 
+export const yooCheckouts = pgTable("ai_yoo_checkouts", {
+  userId: text("user_id").primaryKey(),
+  orderId: text("order_id").notNull(),
+  paymentId: text("payment_id"),
+  plan: text("plan").notNull(),
+  status: text("status").notNull(),
+  createdAt: millis("created_at").notNull(),
+  completedAt: millis("completed_at"),
+  expiresAt: millis("expires_at"),
+}, table => [uniqueIndex("ai_yoo_order_id").on(table.orderId), uniqueIndex("ai_yoo_payment_id").on(table.paymentId)]);
+
 export const userPreferences = pgTable("ai_user_preferences", {
   userId: text("user_id").primaryKey(),
   about: text("about").notNull().default(""),

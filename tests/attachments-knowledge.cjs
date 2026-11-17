@@ -30,7 +30,7 @@ test("Kapani canon is a real bundled system instruction, without DB or upload de
   assert.match(knowledge, /import \{ PUBLIC_KAPANI_LORE \}/);
   assert.match(knowledge, /return always \+ "\\n\\n" \+ full/);
   assert.match(route, /kapaniSystemKnowledge\(question/);
-  assert.match(lore, /Ты — KapaniGPT/);
+  assert.match(lore, /Ты — FedyaGPT/);
   assert.match(lore, /Рыжик/);
   assert.match(lore, /Лёхин шалаш/);
   assert.match(lore, /ФУЛИ|Фули/);

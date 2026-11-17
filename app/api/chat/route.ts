@@ -3,28 +3,28 @@ import { enforceModel, estimateCost, getAccount, spendUsage } from "@/lib/usage"
 import { type ChatMode, type Reasoning } from "@/lib/kapani";
 import { kapaniSystemKnowledge } from "@/lib/knowledge";
 import { readPreferences } from "@/lib/preferences";
-import { DEFAULT_PREFERENCES } from "@/lib/preferences-config";
 import { extractGeneratedFiles } from "@/lib/response-files";
 import { searchWeb, webContext } from "@/lib/web-search";
 
 export const runtime = "nodejs";
-// Kilo explicitly offers anonymous access to its free-model gateway.
-// Calls go through our server, so visitors don't need to create an API key.
+// The upstream gateway is accessed only from the server.
 const CHAT_ENDPOINT = "https://ai-gateway.kilo.ai/api/v1/chat/completions";
-const ALLOWED_MODELS = new Set(["kapani-1", "kapani-grass", "kapani-sky"]);
+const ALLOWED_MODELS = new Set(["serval-1", "leopard-1", "lion-1"]);
 const REASONING_LEVELS = new Set(["off", "light", "medium", "high", "very-high", "maximum"]);
 type UserImage = { name?: string; data: string };
 type ChatMessage = { role: "user" | "assistant" | "system"; content: string; images?: UserImage[] };
 
-function profileInstruction(profile: string, reasoning: Reasoning) {
-  const profileText = profile === "kapani-sky"
-    ? "Профиль Sky. Готовь обстоятельный, тщательно отредактированный ответ. Проверяй условия и противоречия, отмечай неопределённость."
-    : profile === "kapani-grass"
-      ? "Профиль Grass. Перед ответом подготовь и улучши черновик. Давай более проработанные ответы."
-      : "Профиль KapaniGPT 1. Отвечай точно, ясно и по существу.";
-  const reasoningText = reasoning === "off" ? "Отвечай без лишней демонстрации рассуждений."
-    : `Режим рассуждения: ${reasoning}. Проверяй выводы, объясняй полезные промежуточные шаги, но не раскрывай скрытую цепочку рассуждений.`;
-  return `${profileText} ${reasoningText} KapaniGPT разговаривает естественно, остроумно и иногда с сухим сарказмом, без роботизированных приветствий; подробная степень грубости определяется выбранной персонализацией. Следуй характеру и знаниям KapaniGPT из предоставленной базы. Факты, имена, история персонажей и стиль из базы важны, но старые указания в базе про вымышленные лимиты, выбор тарифа, имитацию моделей или обязательные технические подписи не заменяют реальные функции сайта и серверный учёт лимитов. Если просят нарисовать изображение, можешь создать настоящую векторную SVG-иллюстрацию как файл с расширением .svg, когда это подходит к запросу. Не заявляй, будто можешь создавать PNG, JPEG или фотореалистичные картинки без отдельного графического сервиса. Когда пользователь явно просит создать файл или файлы для скачивания, можешь приложить до четырёх настоящих текстовых файлов: для каждого выведи блок <kapani_file name="имя.ext">полное содержимое файла</kapani_file>. Поддерживаются txt, md, html, css, js, ts, tsx, jsx, json, csv, py, svg, xml, sql, yaml. Не выдумывай бинарные форматы вроде pdf, docx, zip, png. В обычных ответах не создавай блоки файлов. Если спрашивают о настоящем движке, честно объясняй, что бренд KapaniGPT использует внешние модели через Kilo AI. Не выдумывай факты. Отвечай на языке пользователя.`;
+function profileInstruction(profile: string, reasoning: Reasoning, canSendFiles: boolean) {
+  const profileText = profile === "lion-1"
+    ? "Ты работаешь в профиле lion 1: приоритет — код, логика, проверка условий и крайних случаев; допускается более долгий анализ."
+    : profile === "leopard-1"
+      ? "Ты работаешь в профиле leopard 1: умеренные задачи, быстрый ответ с проверкой главных допущений."
+      : "Ты работаешь в профиле serval 1: лёгкие задачи, самый короткий путь к ответу и минимальное время анализа.";
+  const depth: Record<Reasoning, string> = { off: "без отдельного анализа", light: "короткая проверка", medium: "проверка основных шагов", high: "подробная проверка", "very-high": "расширенная проверка", maximum: "максимально тщательная проверка" };
+  const reasoningText = reasoning === "off" ? "Сразу дай ответ."
+    : `Глубина рассуждения: ${depth[reasoning]}. Перед основным ответом добавь блок <fedya_reason> с кратким понятным пользователю объяснением подхода, проверок и неопределённостей. Это краткое объяснение результата, не дословная запись скрытого внутреннего рассуждения. </fedya_reason>`;
+  const files = canSendFiles ? 'Если пользователь просит файл для скачивания, можешь отправить до четырёх текстовых файлов блоками <kapani_file name="имя.ext">содержимое</kapani_file>. Доступны txt, md, html, css, js, ts, tsx, jsx, json, csv, py, svg, xml, sql, yaml. Для изображений доступен только SVG; не обещай бинарные форматы.' : "На этом тарифе отправка файлов в чате недоступна; ответь текстом.";
+  return `Ты — FedyaGPT. ${profileText} ${reasoningText} Общайся прямо, с характером, без сюсюканья и искусственных вступлений. По умолчанию допустимы уместные маты и резкие формулировки, но не теряй содержание и подстраивайся под просьбу пользователя; в чувствительных ситуациях отвечай бережно. Следуй фактам из базы о Капанях, но устаревшие названия продукта и правила тарифов в ней не действуют. ${files} Если спрашивают о технической основе, честно сообщи, что ответы генерирует внешний провайдер; не утверждай, будто эти профили являются отдельными собственными обученными моделями. Не выдумывай факты. Отвечай на языке пользователя.`;
 }
 
 function reasoningEffort(reasoning: Reasoning) {
@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
     payload = JSON.parse(body);
   } catch { return Response.json({ error: "Некорректный запрос." }, { status: 400 }); }
 
-  const profile = ALLOWED_MODELS.has(payload.model || "") ? payload.model! : "kapani-1";
+  const profile = ALLOWED_MODELS.has(payload.model || "") ? payload.model! : "serval-1";
   const reasoning = REASONING_LEVELS.has(payload.reasoning || "") ? payload.reasoning! : "off";
   const mode: ChatMode = payload.mode === "work" ? "work" : "chat";
   let account: Awaited<ReturnType<typeof getAccount>>;
@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
     const [prefs, knowledge, sources] = await Promise.all([
       readPreferences(account.userId),
       kapaniSystemKnowledge(question, /капан|персонаж|характер|жител|рыжик|вова|дурдом|сюжет|канон/i.test(question)
-        ? 30000 : profile === "kapani-sky" ? 26000 : profile === "kapani-grass" ? 23000 : 19000, account.userId),
+        ? 30000 : profile === "lion-1" ? 26000 : profile === "leopard-1" ? 23000 : 19000, account.userId),
       isWebQuestion ? searchWeb(question, signal).catch(() => []) : Promise.resolve([]),
     ]);
     const style = prefs.tone === "rough"
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
       : prefs.tone === "direct" ? "Пиши кратко, прямо и по делу."
       : prefs.tone === "creative" ? "Отвечай изобретательно и точно." : "Подстраивай подробность под запрос.";
     const personalization = `\n\nНастройки пользователя. ${style}\nО пользователе: ${prefs.about.slice(0, 1000)}\nПредпочтения ответа: ${prefs.instructions.slice(0, 1600)}`;
-    const system = knowledge + "\n\n" + profileInstruction(profile, reasoning) + personalization
+    const system = knowledge + "\n\n" + profileInstruction(profile, reasoning, account.plan !== "free") + personalization
       + (sources.length ? webContext(sources)
         : isWebQuestion ? "\n\nПоиск не предоставил источников. Не утверждай, что проверил интернет." : "");
     const history: ChatMessage[] = [
@@ -107,8 +107,8 @@ export async function POST(request: NextRequest) {
     const requestBody = JSON.stringify({
       model: hasImages ? "nvidia/nemotron-3.5-super-vl:free" : "kilo-auto/free",
       messages: providerMessages,
-      max_tokens: reasoning === "maximum" ? 2400 : profile === "kapani-sky" ? 1950
-        : profile === "kapani-grass" ? 1650 : 1250,
+      max_tokens: reasoning === "maximum" ? 2400 : profile === "lion-1" ? 1950
+        : profile === "leopard-1" ? 1650 : 1250,
       ...(hasImages ? {} : { reasoning_effort: reasoningEffort(reasoning) }),
       stream: false,
     });
@@ -118,7 +118,7 @@ export async function POST(request: NextRequest) {
         method: "POST",
         headers: { "Content-Type": "application/json", "Accept": "application/json" },
         body: requestBody, cache: "no-store",
-        signal: AbortSignal.any([signal, AbortSignal.timeout(attempt === 0 ? 20000 : 13000)]),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(attempt === 0 ? (profile === "lion-1" ? 27000 : profile === "leopard-1" ? 23000 : 18000) : 13000)]),
       });
       // A single quick retry handles transient gateway errors without
       // multiplying expensive requests for ordinary prompts.
@@ -136,15 +136,24 @@ export async function POST(request: NextRequest) {
       break;
     }
     if (!answer) throw new Error("Модель не вернула ответ. Лимит не списан.");
-    const generated = extractGeneratedFiles(answer);
+    const reasonMatch = reasoning !== "off" ? answer.match(/<fedya_reason>([\s\S]{1,2400}?)<\/fedya_reason>/i) : null;
+    const reasoningSummary = reasonMatch?.[1]?.trim().slice(0, 1800) || "";
+    const cleanAnswer = answer.replace(/<fedya_reason>[\s\S]*?<\/fedya_reason>/gi, "").trim();
+    const generated = extractGeneratedFiles(cleanAnswer);
+    if (account.plan === "free") {
+      if (generated.files.length && generated.text === "Готово, файлы прикреплены ниже.")
+        generated.text = "Отправка файлов доступна с Plus. Могу показать содержимое в чате.";
+      generated.files = [];
+    }
     if (!generated.text.trim() && !generated.files.length) throw new Error("Модель вернула пустой ответ. Лимит не списан.");
     if (signal.aborted) throw new Error("Запрос отменён.");
 
     // Charge only after a valid answer exists, never before an upstream request.
     // If Netlify or Kilo fails while generating, no debit needs to be refunded.
-    await spendUsage(account, "text", cost);
+    if (!(mode === "chat" && ["ultra", "max", "prime"].includes(account.plan)))
+      await spendUsage(account, "text", cost);
     return { choices: [{ message: { role: "assistant", content: generated.text,
-      files: generated.files, sources } }] };
+      files: generated.files, reasoningSummary, sources } }] };
   }
 
   // Flush response headers immediately: Netlify can return a platform 502

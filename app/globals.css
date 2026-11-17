@@ -819,3 +819,68 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .knowledge-status .knowledge-feedback { color: #b4efc1; }
 .svg-preview { display: block; max-width: 100%; padding: 8px; margin: 9px 0; border: 1px solid #34543e; border-radius: 12px; background: #142019; }
 .svg-preview img { display: block; width: auto; max-width: 100%; max-height: 360px; object-fit: contain; border-radius: 7px; }
+
+/* FedyaGPT: accessible light palette and bounded controls. */
+.plans-grid { grid-template-columns: repeat(5,minmax(0,1fr)); }
+.reasoning-summary { margin: 11px 0 13px; padding: 10px 13px; border: 1px solid #315840; border-radius: 11px; background: #14251a; color: #b8d4c0; font-size: 12px; line-height: 1.6; }
+.reasoning-summary summary { cursor: pointer; font-weight: 650; color: #91d7a7; }
+.reasoning-summary > div { margin-top: 8px; }
+.reasoning-panel input[type="range"] { touch-action: pan-x; }
+.reasoning-panel input[type="range"]::-webkit-slider-thumb { transition: transform .15s ease, box-shadow .15s ease; }
+.settings-row select { background: #102017; border: 1px solid #3d7850; color: #d8f5e0; border-radius: 9px; padding: 9px; }
+.theme-light { color-scheme: light; background: #f0f5f0; color: #17281b; }
+.theme-light .sidebar { background: #e7f1e7; border-color: #c5d9c9; }
+.theme-light .main-area { background: radial-gradient(ellipse at 50% 110%,#d9f0de,transparent 65%),#f8fbf7; }
+.theme-light .topbar { background: #f8fbf7; border-color: #cbded0; }
+.theme-light .sidebar-head,.theme-light .sidebar-bottom,.theme-light .sidebar-top-actions { background: #e7f1e7; }
+.theme-light .brand,.theme-light .profile,.theme-light .side-nav,.theme-light .chat-open,.theme-light .top-brand-name,.theme-light .icon-button { color: #253b2b; }
+.theme-light .chat-item:hover,.theme-light .chat-item.active,.theme-light .side-nav:hover,.theme-light .profile:hover { background: #d3e9d8; }
+.theme-light .section-caption,.theme-light .empty-history,.theme-light .profile-text small,.theme-light .composer-note { color: #567260; }
+.theme-light .home-content h1,.theme-light .conversation-title,.theme-light .assistant-copy { color: #1c3023; }
+.theme-light .home-content p,.theme-light .prose-line,.theme-light .prose-heading { color: #425e4a; }
+.theme-light .composer { background: #fff; border-color: #b7d2be; box-shadow: 0 16px 44px #1c5c3012; }
+.theme-light .composer textarea { color: #162a1c; }
+.theme-light .composer textarea::placeholder { color: #667f6b; }
+.theme-light .tool-mode,.theme-light .model-pill,.theme-light .tool-icon { background: #eaf3eb; color: #294634; border-color: #b7d2be; }
+.theme-light .composer-work-label,.theme-light .mode-switch { background: #e1f0e5; color: #215e38; }
+.theme-light .mode-switch button:not(.active) { color: #4e715a; }
+.theme-light .mode-switch button.active { background: #328152; color: white; }
+.theme-light .reasoning-panel,.theme-light .model-dropdown { background: #fff; color: #1c3424; border-color: #b7d5c0; box-shadow: 0 18px 52px #254b2b24; }
+.theme-light .reasoning-heading,.theme-light .reasoning-current,.theme-light .model-option,.theme-light .model-option small { color: #25432d; }
+.theme-light .reasoning-range-labels { color: #477052; }
+.theme-light .reasoning-range-labels span.selected,.theme-light .model-option.selected { background: #d1ebd8; color: #184c2a; }
+.theme-light .reasoning-summary { background: #e7f4e9; border-color: #b5d8c0; color: #385945; }
+.theme-light .reasoning-summary summary { color: #22663d; }
+.theme-light .suggestions button,.theme-light .usage-chip { background: #edf5ed; border-color: #c0d9c5; color: #2b4c35; }
+.theme-light .user-bubble { background: #dceee1; color: #1b3525; }
+.theme-light .settings-dialog,.theme-light .search-dialog,.theme-light .confirm-dialog,.theme-light .shop-dialog { background: #f9fcf9; color: #1c3324; border-color: #bfd7c5; }
+.theme-light .settings-tabs,.theme-light .settings-content { background: #f4faf5; }
+.theme-light .settings-tabs button,.theme-light .settings-row strong,.theme-light .settings-section h3,.theme-light .dialog-top h2,.theme-light .shop-head h2,.theme-light .plan-card h3 { color: #203c2a; }
+.theme-light .settings-tabs button.active { background: #d7eddd; color: #1a6136; }
+.theme-light .settings-row,.theme-light .settings-tabs { border-color: #cadfce; }
+.theme-light .settings-row small,.theme-light .settings-intro,.theme-light .shop-head p { color: #557460; }
+.theme-light .settings-account-card,.theme-light .quota-card,.theme-light .privacy-note,.theme-light .plan-card,.theme-light .checkout-panel { background: #edf7ef; border-color: #bddbc5; color: #203b29; }
+.theme-light .settings-field,.theme-light .settings-value,.theme-light .quota-heading,.theme-light .quota-line,.theme-light .quota-line b { color: #215c36; }
+.theme-light .settings-field textarea,.theme-light .settings-field select,.theme-light .settings-row select { background: #fff; color: #203c28; border-color: #afd2b9; }
+.theme-light .shop-footer,.theme-light .plan-perks,.theme-light .plan-price,.theme-light .checkout-panel p { color: #42684b; }
+.theme-light .code-block { background: #eff6ef; color: #183b25; }
+@media (max-width: 850px) { .plans-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 600px) {
+  .composer-toolbar { min-width: 0; }
+  .tool-left { min-width: 0; flex: 1; gap: 3px; }
+  .tool-right { flex: 0 0 auto; }
+  .model-selector { max-width: min(115px,29vw); }
+  .reasoning-mode { max-width: min(115px,30vw); overflow: hidden; }
+  .reasoning-mode span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .reasoning-panel { left: 0; width: min(300px,calc(100vw - 80px)); max-width: none; padding: 13px; }
+  .reasoning-range-labels { gap: 1px; font-size: 9px; }
+  .reasoning-range-labels span { padding-inline: 0; min-width: 0; }
+  .composer-work-label { display: none; }
+  .topbar-right { flex-shrink: 0; }
+  .theme-button { width: 30px; }
+}
+@media (max-width: 370px) {
+  .mobile-promo-button { display: none; }
+  .plans-grid { grid-template-columns: 1fr; }
+  .reasoning-mode { max-width: 84px; }
+}

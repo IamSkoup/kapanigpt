@@ -3,23 +3,21 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createUserWithEmailAndPassword, getIdToken, onAuthStateChanged, signInWithEmailAndPassword, signOut, updateProfile } from "firebase/auth";
 import { collection, deleteDoc, doc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc, updateDoc, writeBatch } from "firebase/firestore";
-import { ArrowUp, AudioLines, Check, ChevronDown, ChevronRight, CircleHelp, Clipboard, Code2, Download, FileCode2, FileText, Menu, MessageCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, WandSparkles, X, Crown, LockKeyhole, BrainCircuit, Wallet, LogIn, LoaderCircle, Zap, Gift } from "lucide-react";
+import { ArrowUp, AudioLines, Check, ChevronDown, ChevronRight, CircleHelp, Clipboard, Code2, Download, FileCode2, FileText, Menu, MessageCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, WandSparkles, X, Crown, LockKeyhole, BrainCircuit, LoaderCircle, Zap, Gift, Sun, Moon } from "lucide-react";
 import { auth, database } from "@/lib/firebase";
-import { MODEL_CHOICES, PLANS, REASONING, TOKEN_PACKS, type ChatMode, type Plan, type Reasoning, type TokenPack } from "@/lib/kapani";
+import { MODEL_CHOICES, PLANS, REASONING, type ChatMode, type Plan, type Reasoning } from "@/lib/kapani";
 import { DEFAULT_PREFERENCES, type UserPreferences } from "@/lib/preferences-config";
 import { type GeneratedFile } from "@/lib/response-files";
 
 type Attachment = { name: string; type: string; size: number; data?: string; text?: string };
 type WebSource = { title: string; url: string; snippet: string };
-type ChatMessage = { id: string; role: "user" | "assistant"; content: string; createdAt: number; attachments?: Attachment[]; generatedFiles?: GeneratedFile[]; sources?: WebSource[] };
+type ChatMessage = { reasoningSummary?: string; id: string; role: "user" | "assistant"; content: string; createdAt: number; attachments?: Attachment[]; generatedFiles?: GeneratedFile[]; sources?: WebSource[] };
 type Chat = { id: string; title: string; updatedAt: number; pinned?: boolean; mode: ChatMode };
-const DEFAULT_MODEL = "kapani-1";
+const DEFAULT_MODEL = "serval-1";
 type Usage = { plan: Plan; providerConfigured: boolean; remainingPercent: number; remainingFiveHourPercent: number; fiveHourBudget: number; weeklyBudget: number; tokensBalance: number; fiveHourResetsAt: number; imagesLeft: number; imagesMax: number; nickname: string | null; balance: number | null; expiresAt: string | null; promoEligible: boolean; promoClaimed: boolean; promoStartsAt: string | null; promoExpiresAt: string | null };
-const EMPTY_USAGE: Usage = { plan: "free", providerConfigured: true, remainingPercent: 100, remainingFiveHourPercent: 100, fiveHourBudget: 30, weeklyBudget: 100, tokensBalance: 0, fiveHourResetsAt: 0, imagesLeft: 1, imagesMax: 1, nickname: null, balance: null, expiresAt: null, promoEligible: false, promoClaimed: false, promoStartsAt: null, promoExpiresAt: null };
+const EMPTY_USAGE: Usage = { plan: "free", providerConfigured: true, remainingPercent: 100, remainingFiveHourPercent: 100, fiveHourBudget: 35, weeklyBudget: 175, tokensBalance: 0, fiveHourResetsAt: 0, imagesLeft: 1, imagesMax: 1, nickname: null, balance: null, expiresAt: null, promoEligible: false, promoClaimed: false, promoStartsAt: null, promoExpiresAt: null };
 const CHAT_REASONING: Reasoning[] = ["off", "light", "medium", "high"];
 const WORK_REASONING: Reasoning[] = ["off", "light", "medium", "high", "very-high", "maximum"];
-type KapaniSession = { accessToken: string; expiresAt: number };
-type KapaniBank = { nickname: string; balance: number };
 const makeId = () => globalThis.crypto?.randomUUID?.() || "msg-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
 function niceDate(time: number) {
   const date = new Date(time), today = new Date();
@@ -95,30 +93,29 @@ export default function Home() {
   const [messageBusy, setMessageBusy] = useState(false), [messageNotice, setMessageNotice] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null), [renameValue, setRenameValue] = useState(""), [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [model, setModel] = useLocalState("kapani-horde-model", DEFAULT_MODEL);
+  const [model, setModel] = useLocalState("fedya-model", DEFAULT_MODEL);
   const [reasoning, setReasoning] = useState<Reasoning>("off"), [reasoningOpen, setReasoningOpen] = useState(false);
+  const [reasoningPosition, setReasoningPosition] = useState(0);
   const [chatMode, setChatMode] = useState<ChatMode>("chat"), [temporaryChatStarted, setTemporaryChatStarted] = useState(false);
   const [preferences, setPreferences] = useState<UserPreferences>(DEFAULT_PREFERENCES);
   const [settingsTab, setSettingsTab] = useState<"account" | "personal" | "privacy" | "limits" | "appearance">("account");
   const [preferencesSaving, setPreferencesSaving] = useState(false), [preferencesMessage, setPreferencesMessage] = useState("");
-  const [compact, setCompact] = useLocalState("kapani-compact-ui", false);
+  const [compact, setCompact] = useLocalState("fedya-compact-ui", false);
+  const [theme, setTheme] = useLocalState<"dark" | "light">("fedya-theme", "dark");
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false), [deletingAll, setDeletingAll] = useState(false);
   const [thinkingStatus, setThinkingStatus] = useState("Думаю…");
   const [usage, setUsage] = useState<Usage>(EMPTY_USAGE);
   const [claimingPromo, setClaimingPromo] = useState(false), [promoError, setPromoError] = useState("");
   const [shopOpen, setShopOpen] = useState(false), [checkoutPlan, setCheckoutPlan] = useState<Plan | null>(null), [buying, setBuying] = useState(false);
-  const [shopTab, setShopTab] = useState<"plans" | "tokens">("plans");
-  const [checkoutPack, setCheckoutPack] = useState<TokenPack | null>(null), [buyingTokens, setBuyingTokens] = useState(false);
+  const [billingReady, setBillingReady] = useState(false);
   const [unlockSteps, setUnlockSteps] = useState<string[]>([]), [unlockIndex, setUnlockIndex] = useState(0);
-  const [kapaniSession, setKapaniSession] = useState<KapaniSession | null>(null);
-  const [kapaniBank, setKapaniBank] = useState<KapaniBank | null>(null);
-  const [loginNick, setLoginNick] = useState(""), [loginPassword, setLoginPassword] = useState(""), [loggingIn, setLoggingIn] = useState(false), [shopError, setShopError] = useState("");
+  const [shopError, setShopError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null), inputRef = useRef<HTMLTextAreaElement>(null), bottomRef = useRef<HTMLDivElement>(null);
   const lastAuthUid = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null), activeRef = useRef<string | null>(null), messagesRef = useRef<ChatMessage[]>([]);
-  const modelName = MODEL_CHOICES.find(m => m.id === model)?.name || "KapaniGPT 1";
+  const modelName = MODEL_CHOICES.find(m => m.id === model)?.name || "serval 1";
   const tier = PLANS[usage.plan];
-  const isFree = usage.plan === "free";
+  const canWork = !["free", "plus"].includes(usage.plan);
   const modeLocked = !!chatId || temporaryChatStarted || streaming;
   const activeRemaining = usage.remainingFiveHourPercent;
   const activeWeeklyRemaining = usage.remainingPercent;
@@ -139,7 +136,7 @@ export default function Home() {
   // Bank credentials must no longer survive checkout or page reloads.
   useEffect(() => { try { sessionStorage.removeItem("kapani-ai-login"); } catch {} }, []);
   const authorizationHeaders = useCallback(async (): Promise<Record<string, string>> => {
-    // KapaniGPT chat, usage and entitlements always belong to Firebase.
+    // FedyaGPT chat, usage and entitlements always belong to Firebase.
     // A temporary Kapani bank login must never switch the current user.
     const user = auth.currentUser;
     if (!user) throw new Error("Firebase ещё подключается. Подожди секунду.");
@@ -167,8 +164,8 @@ export default function Home() {
       await refreshUsage();
       const scheduled = new Date(result.startsAt).getTime() > Date.now() + 2000;
       setUnlockSteps(scheduled
-        ? ["Неделя Kapani AI plus за тобой!", "Она начнётся " + new Date(result.startsAt).toLocaleDateString("ru-RU") + ", когда закончится текущая подписка."]
-        : ["Kapani AI plus бесплатно на 7 дней!", "Открыты режим «Работа» и все модели KapaniGPT", "Подписка действует до " + new Date(result.expiresAt).toLocaleDateString("ru-RU")]);
+        ? ["Неделя Fedya AI plus за тобой!", "Она начнётся " + new Date(result.startsAt).toLocaleDateString("ru-RU") + ", когда закончится текущая подписка."]
+        : ["Fedya AI plus бесплатно на 7 дней!", "В чате увеличен лимит сообщений", "Подписка действует до " + new Date(result.expiresAt).toLocaleDateString("ru-RU")]);
       setUnlockIndex(0);
       setSettingsOpen(false); setMobileSidebar(false);
     } catch (error) {
@@ -181,9 +178,10 @@ export default function Home() {
   useEffect(() => { if (uid) refreshUsage(); }, [uid, refreshUsage]);
   useEffect(() => { if (!uid) return; const timer = setInterval(refreshUsage, 60000); return () => clearInterval(timer); }, [uid, refreshUsage]);
   useEffect(() => {
-    if (chatMode === "chat" && !["off", "light", "medium", "high"].includes(reasoning)) setReasoning("off");
-    if (isFree && chatMode === "chat" && !["off", "medium"].includes(reasoning)) setReasoning("off");
-  }, [chatMode, isFree, reasoning]);
+    if (chatMode === "chat" && !["off", "light", "medium", "high"].includes(reasoning)) {
+      setReasoning("off"); setReasoningPosition(0);
+    }
+  }, [chatMode, reasoning]);
   useEffect(() => {
     if (!uid) return;
     let cancelled = false;
@@ -207,87 +205,42 @@ export default function Home() {
     finally { setPreferencesSaving(false); }
   }
 
-  async function loginKapani() {
-    if (!loginNick.trim() || !loginPassword) { setShopError("Введи ник и пароль от «Капани»."); return; }
-    setLoggingIn(true); setShopError("");
-    try {
-      // All bank requests go through our same-origin server. Direct browser
-      // access to *.supabase.co can fail in regions where Cloudflare is blocked.
-      const response = await fetch("/api/kapani/login", { method: "POST", cache: "no-store",
-        headers: { "Content-Type": "application/json", ...await authorizationHeaders() },
-        body: JSON.stringify({ login: loginNick.trim(), password: loginPassword }) });
-      const data = await response.json() as KapaniBank & { accessToken?: string; expiresIn?: number; error?: string };
-      if (!response.ok || !data.accessToken) throw new Error(data.error || "Не удалось войти в банк Капаней.");
-      setKapaniBank({ nickname: data.nickname, balance: data.balance });
-      // The wallet token lives only in memory while the checkout is open.
-      setKapaniSession({ accessToken: data.accessToken, expiresAt: Date.now() + (data.expiresIn || 3600) * 1000 });
-      setLoginPassword("");
-    } catch (e) { setShopError(e instanceof Error ? e.message : "Не удалось войти."); }
-    finally { setLoggingIn(false); }
-  }
   async function buyPlan(plan: Plan) {
-    if (plan === "free" || !kapaniSession || !uid) return;
+    if (plan === "free" || plan === "prime" || buying) return;
     setBuying(true); setShopError("");
     try {
-      if (kapaniSession.expiresAt < Date.now() + 15000) throw new Error("Банковская сессия истекла. Отключи счёт и войди заново.");
-      const key = "kapani-gpt-pending-purchase:" + uid;
-      let pending: { id: string; plan: Plan } | null = null;
-      try { pending = JSON.parse(localStorage.getItem(key) || "null"); } catch { /* invalid old cache */ }
-      if (pending && pending.plan !== plan) throw new Error("Сначала заверши предыдущую покупку " + PLANS[pending.plan].name + ".");
-      const purchaseId = pending?.id || crypto.randomUUID();
-      localStorage.setItem(key, JSON.stringify({ id: purchaseId, plan }));
-      const response = await fetch("/api/kapani/purchase", { method: "POST", cache: "no-store",
-        headers: { "Content-Type": "application/json", ...await authorizationHeaders(), "x-kapani-token": kapaniSession.accessToken },
-        body: JSON.stringify({ plan, purchaseId }) });
-      const purchase = await response.json() as { success?: boolean; balance?: number; expiresAt?: string; error?: string };
-      if (!response.ok || !purchase.success) throw new Error(purchase.error || "Платёж не подтверждён сервером Капани.");
-      localStorage.removeItem(key);
-      const steps = ["Подписка " + PLANS[plan].name + " активирована", "Открыты режим «Работа» и все модели KapaniGPT", "Доступны три уровня рассуждения в чате"];
-      if (purchase.balance != null) steps.push("Баланс после покупки — " + purchase.balance.toLocaleString("ru-RU") + " капанёвских ₽");
-      setUnlockSteps(steps); setUnlockIndex(0); setCheckoutPlan(null); setShopOpen(false);
-      setKapaniSession(null); setKapaniBank(null); setLoginNick("");
-      await refreshUsage();
-    } catch (e) { setShopError(e instanceof Error ? e.message : "Ошибка оплаты"); }
+      const response = await fetch("/api/billing", { method: "POST", headers: {
+        "Content-Type": "application/json", ...await authorizationHeaders(),
+      }, body: JSON.stringify({ plan }) });
+      const result = await response.json() as { status?: string; url?: string; error?: string };
+      if (!response.ok) throw new Error(result.error || "Не удалось создать платёж.");
+      if (result.status === "completed") { await refreshUsage(); setShopOpen(false); setCheckoutPlan(null); return; }
+      if (!result.url) throw new Error("Ссылка на оплату не получена.");
+      window.location.assign(result.url);
+    } catch (e) { setShopError(e instanceof Error ? e.message : "Ошибка оплаты."); }
     finally { setBuying(false); }
   }
 
-  async function buyTokenPack(pack: TokenPack) {
-    if (!kapaniSession || !uid || buyingTokens) return;
-    setBuyingTokens(true); setShopError("");
-    try {
-      if (kapaniSession.expiresAt < Date.now() + 15000)
-        throw new Error("Банковская сессия истекла. Войди в банк Капаней заново.");
-      const key = "kapani-gpt-pending-tokens:" + uid;
-      let pending: { id: string; pack: TokenPack } | null = null;
-      try { pending = JSON.parse(localStorage.getItem(key) || "null"); } catch { /* retry from server */ }
-      if (pending && pending.pack !== pack)
-        throw new Error("Сначала заверши прежнюю покупку токенов. Её данные сохранены для безопасного повтора.");
-      const headers = { "Content-Type": "application/json", ...await authorizationHeaders(), "x-kapani-token": kapaniSession.accessToken };
-      if (!pending) {
-        const started = await fetch("/api/kapani/tokens", { method: "POST", cache: "no-store", headers,
-          body: JSON.stringify({ action: "start", pack }) });
-        const checkout = await started.json() as { purchaseId?: string; error?: string };
-        if (!started.ok || !checkout.purchaseId) throw new Error(checkout.error || "Не удалось начать покупку.");
-        pending = { id: checkout.purchaseId, pack };
-        localStorage.setItem(key, JSON.stringify(pending));
-      }
-      const response = await fetch("/api/kapani/tokens", { method: "POST", cache: "no-store", headers,
-        body: JSON.stringify({ action: "confirm", pack, purchaseId: pending.id }) });
-      const purchase = await response.json() as { success?: boolean; tokensAdded?: number; tokensBalance?: number; bankBalance?: number; error?: string };
-      if (!response.ok || !purchase.success) throw new Error(purchase.error || "Банк не подтвердил покупку токенов.");
-      localStorage.removeItem(key);
-      setUnlockSteps([`Зачислено ${purchase.tokensAdded ?? TOKEN_PACKS[pack].tokens} токенов KapaniGPT`,
-        `Остаток токенов — ${(purchase.tokensBalance || 0).toLocaleString("ru-RU")}. Они не сгорают.`]);
-      setUnlockIndex(0); setCheckoutPack(null); setShopOpen(false);
-      setKapaniSession(null); setKapaniBank(null); setLoginNick("");
-      await refreshUsage();
-    } catch (e) { setShopError(e instanceof Error ? e.message : "Ошибка покупки токенов."); }
-    finally { setBuyingTokens(false); }
-  }
+  useEffect(() => {
+    if (!uid) return;
+    void (async () => {
+      try {
+        const response = await fetch("/api/billing", { headers: await authorizationHeaders(), cache: "no-store" });
+        const result = await response.json() as { status?: string; configured?: boolean; error?: string };
+        setBillingReady(!!result.configured);
+        if (response.ok && result.status === "completed") await refreshUsage();
+        if (new URLSearchParams(location.search).has("payment")) {
+          if (result.status === "pending") setError("Платёж ещё обрабатывается. Обнови страницу чуть позже.");
+          else if (result.status === "canceled") setError("Платёж отменён. Подписка не активирована.");
+          else if (!response.ok) setError(result.error || "Не удалось проверить платёж.");
+          history.replaceState(null, "", location.pathname);
+        }
+      } catch { /* A billing outage must not prevent chat use. */ }
+    })();
+  }, [uid, authorizationHeaders, refreshUsage]);
 
   useEffect(() => onAuthStateChanged(auth, user => {
     if (lastAuthUid.current !== (user?.uid || null)) {
-      setKapaniSession(null); setKapaniBank(null);
       setUsage(EMPTY_USAGE);
       setPromoError("");
       setPreferences(DEFAULT_PREFERENCES);
@@ -300,18 +253,18 @@ export default function Home() {
     }
     setUid(user?.uid || null); setAuthReady(true);
     if (user) setAuthError("");
-    else { setChats([]); setMessages([]); setChatId(null); setChatMode("chat"); setTemporaryChatStarted(false); messagesRef.current = []; setKapaniSession(null); setKapaniBank(null); }
+    else { setChats([]); setMessages([]); setChatId(null); setChatMode("chat"); setTemporaryChatStarted(false); messagesRef.current = []; }
   }, e => { setAuthError(e.message); setAuthReady(true); }), []);
   useEffect(() => {
     if (!streaming) return;
-    const phrases = model === "kapani-sky"
+    const phrases = model === "lion-1"
       ? ["Думаю над запросом…", "Собираю данные из контекста…", "Анализирую детали…", "Проверяю выводы…", "Уточняю формулировки…", "Готовлю ответ…"]
-      : model === "kapani-grass" || reasoning !== "off"
+      : model === "leopard-1" || reasoning !== "off"
         ? ["Думаю…", "Анализирую запрос…", "Собираю данные из контекста…", "Проверяю ответ…", "Формулирую мысль…"]
         : ["Думаю…", "Готовлю ответ…"];
     let index = 0;
     setThinkingStatus(phrases[0]);
-    const timer = setInterval(() => { index = (index + 1) % phrases.length; setThinkingStatus(phrases[index]); }, model === "kapani-sky" ? 2900 : 2300);
+    const timer = setInterval(() => { index = (index + 1) % phrases.length; setThinkingStatus(phrases[index]); }, model === "lion-1" ? 2900 : 2300);
     return () => clearInterval(timer);
   }, [streaming, model, reasoning]);
   async function submitFirebaseAuth(event: React.FormEvent<HTMLFormElement>) {
@@ -369,8 +322,8 @@ export default function Home() {
     return () => document.removeEventListener("pointerdown", closeOnOutside);
   }, [messageMenuId]);
 
-  function newChat() { abortRef.current?.abort(); setChatId(null); setChatMode("chat"); setReasoning("off"); setTemporaryChatStarted(false); setMessages([]); messagesRef.current = []; setPrompt(""); setAttachments([]); setMessageMenuId(null); setEditingMessageId(null); setMessageConfirm(null); setMessageNotice(""); setError(""); setStreamedText(""); setStreaming(false); setMobileSidebar(false); setTimeout(() => inputRef.current?.focus(), 40); }
-  function changeMode(next: ChatMode) { if (modeLocked || (next === "work" && isFree)) return; setChatMode(next); setReasoning("off"); setModelOpen(false); setReasoningOpen(false); }
+  function newChat() { abortRef.current?.abort(); setChatId(null); setChatMode("chat"); setReasoning("off"); setReasoningPosition(0); setTemporaryChatStarted(false); setMessages([]); messagesRef.current = []; setPrompt(""); setAttachments([]); setMessageMenuId(null); setEditingMessageId(null); setMessageConfirm(null); setMessageNotice(""); setError(""); setStreamedText(""); setStreaming(false); setMobileSidebar(false); setTimeout(() => inputRef.current?.focus(), 40); }
+  function changeMode(next: ChatMode) { if (modeLocked || (next === "work" && !canWork)) return; setChatMode(next); setReasoning("off"); setReasoningPosition(0); setModelOpen(false); setReasoningOpen(false); }
   async function editChat(id: string, changes: Record<string, unknown>) { if (!uid) return; await updateDoc(doc(database, "users", uid, "chats", id), { ...changes, updatedAt: serverTimestamp() }); }
   async function removeChat(id: string) {
     if (!uid) return;
@@ -450,21 +403,23 @@ export default function Home() {
     });
     let complete = "";
     let generatedFiles: GeneratedFile[] = [];
+    let reasoningSummary = "";
     let sources: WebSource[] = [];
     try {
       const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...await authorizationHeaders() }, body: JSON.stringify({ messages: prior, mode: chatMode, model: chatMode === "work" ? model : DEFAULT_MODEL, reasoning }), signal: controller.signal });
       if (!response.ok) { const data = await response.json().catch(() => ({})) as { error?: string }; throw new Error(data.error || "Ошибка сервера " + response.status); }
-      const initial = await response.json() as { error?: string; usage?: Usage; choices?: Array<{ message?: { content?: string; files?: GeneratedFile[]; sources?: WebSource[] } }> };
+      const initial = await response.json() as { error?: string; usage?: Usage; choices?: Array<{ message?: { content?: string; files?: GeneratedFile[]; sources?: WebSource[]; reasoningSummary?: string } }> };
       if (initial.error) throw new Error(initial.error);
        if (initial.usage) setUsage(initial.usage);
       complete = initial.choices?.[0]?.message?.content || "";
       generatedFiles = initial.choices?.[0]?.message?.files || [];
       sources = initial.choices?.[0]?.message?.sources || [];
+      reasoningSummary = initial.choices?.[0]?.message?.reasoningSummary || "";
       if (!complete.trim() && !generatedFiles.length) throw new Error("Модель вернула пустой ответ. Попробуй другую модель.");
     } catch (e) { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Ошибка генерации."); }
     finally {
       if (complete.trim() || generatedFiles.length) {
-        const assistantMessage: ChatMessage = { id: makeId(), role: "assistant", content: complete, generatedFiles, sources, createdAt: Date.now() + 1 };
+        const assistantMessage: ChatMessage = { id: makeId(), role: "assistant", content: complete, generatedFiles, sources, reasoningSummary, createdAt: Date.now() + 1 };
         if (saveHistory) {
           try { await setDoc(doc(database, "users", uid, "chats", currentChat, "messages", assistantMessage.id), assistantMessage); } catch {}
         } else {
@@ -553,9 +508,9 @@ export default function Home() {
     setTimeout(() => URL.revokeObjectURL(url), 1200);
   }
   function exportChat() {
-    const title = chats.find(c => c.id === chatId)?.title || "KapaniGPT", md = "# " + title + "\n\n" + messages.map(m => "## " + (m.role === "user" ? "Вы" : "KapaniGPT") + "\n\n" + m.content + "\n").join("\n");
+    const title = chats.find(c => c.id === chatId)?.title || "FedyaGPT", md = "# " + title + "\n\n" + messages.map(m => "## " + (m.role === "user" ? "Вы" : "FedyaGPT") + "\n\n" + m.content + "\n").join("\n");
     const url = URL.createObjectURL(new Blob([md], { type: "text/markdown;charset=utf-8" })), anchor = document.createElement("a");
-    anchor.href = url; anchor.download = "KapaniGPT-chat.md"; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    anchor.href = url; anchor.download = "FedyaGPT-chat.md"; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   function speakMessage(text: string) { if (!("speechSynthesis" in window)) return; speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(text); utterance.lang = "ru-RU"; speechSynthesis.speak(utterance); }
   function recordVoice() {
@@ -567,7 +522,7 @@ export default function Home() {
   const groupedChats = chats.filter(c => c.title.toLowerCase().includes(search.toLowerCase())), pinnedChats = groupedChats.filter(c => c.pinned), recentChats = groupedChats.filter(c => !c.pinned), activeTitle = chats.find(c => c.id === chatId)?.title;
   function renderChatItem(chat: Chat) {
     return <div className={"chat-item " + (chatId === chat.id ? "active" : "")} key={chat.id}>
-      <button className="chat-open" onClick={() => { setChatId(chat.id); setChatMode(chat.mode); setTemporaryChatStarted(false); setReasoning("off"); setError(""); setMobileSidebar(false); }}><MessageCircle size={15} /><span>{chat.title}</span>{chat.mode === "work" && <span className="chat-mode-dot" title="Работа"/>}</button>
+      <button className="chat-open" onClick={() => { setChatId(chat.id); setChatMode(chat.mode); setTemporaryChatStarted(false); setReasoning("off"); setReasoningPosition(0); setError(""); setMobileSidebar(false); }}><MessageCircle size={15} /><span>{chat.title}</span>{chat.mode === "work" && <span className="chat-mode-dot" title="Работа"/>}</button>
       <button className="chat-menu-button" aria-label="Действия с чатом" onClick={() => setMenuId(menuId === chat.id ? null : chat.id)}><MoreHorizontal size={17} /></button>
       {menuId === chat.id && <div className="chat-menu"><button onClick={() => { setRenameValue(chat.title); setRenaming(chat.id); setMenuId(null); }}><Pencil size={14} /> Переименовать</button><button onClick={() => { editChat(chat.id, { pinned: !chat.pinned }); setMenuId(null); }}><Pin size={14} /> {chat.pinned ? "Открепить" : "Закрепить"}</button><button className="delete-item" onClick={() => { setDeleteTarget(chat.id); setMenuId(null); }}><Trash2 size={14} /> Удалить</button></div>}
       {renaming === chat.id && <div className="rename-overlay"><input autoFocus value={renameValue} onChange={e => setRenameValue(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { editChat(chat.id, { title: renameValue.trim() || chat.title }); setRenaming(null); } if (e.key === "Escape") setRenaming(null); }} /><button onClick={() => { editChat(chat.id, { title: renameValue.trim() || chat.title }); setRenaming(null); }}><Check size={15} /></button></div>}
@@ -591,6 +546,7 @@ export default function Home() {
             <div className="message-edit-footer"><span>Ctrl+Enter — сохранить</span><button onClick={() => setEditingMessageId(null)}>Отмена</button>
               <button className="message-edit-save" disabled={messageBusy || !editingMessageText.trim()} onClick={() => submitMessageEdit(m, laterCount)}><Check size={14}/> Сохранить</button></div>
           </div> : m.content && <div className={m.role === "user" ? "user-bubble" : "assistant-copy"}>{m.role === "user" ? m.content : renderText(m.content)}</div>}
+          {m.role === "assistant" && !!m.reasoningSummary && <details className="reasoning-summary"><summary>Как я подошёл к ответу</summary><div>{renderText(m.reasoningSummary)}</div></details>}
           {!!m.sources?.length && <div className="web-sources"><strong>Источники из интернета</strong><div>{m.sources.map((source, i) => <a key={i} href={source.url} target="_blank" rel="noopener noreferrer" title={source.snippet}><span>[{i + 1}]</span> {source.title}</a>)}</div></div>}
           {!!m.generatedFiles?.length && m.generatedFiles.some(file => file.mime === "image/svg+xml") &&
             <div className="svg-previews">{m.generatedFiles.filter(file => file.mime === "image/svg+xml").map((file, i) =>
@@ -622,42 +578,42 @@ export default function Home() {
       <div className="auth-brand"><span className="auth-brand-symbol"><Sparkles size={22}/></span><span>Kapani<span>GPT</span></span></div>
       {authReady ? <>
         <h1>{authMode === "register" ? "Создай свой аккаунт" : "С возвращением"}</h1>
-        <p className="auth-subtitle">Личные чаты, история и модели KapaniGPT. Войти нужно один раз — дальше сессия сохранится.</p>
+        <p className="auth-subtitle">Личные чаты, история и модели FedyaGPT. Войти нужно один раз — дальше сессия сохранится.</p>
         <div className="auth-tabs"><button className={authMode === "login" ? "active" : ""} onClick={() => { setAuthMode("login"); setAuthError(""); }}>Вход</button><button className={authMode === "register" ? "active" : ""} onClick={() => { setAuthMode("register"); setAuthError(""); }}>Регистрация</button></div>
         <form className="auth-form" onSubmit={submitFirebaseAuth}>
           {authMode === "register" && <label>Никнейм<input value={authNickname} onChange={e => setAuthNickname(e.target.value)} placeholder="Как тебя называть" minLength={2} maxLength={40} required autoComplete="nickname"/></label>}
           <label>Электронная почта<input value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" type="email" required autoComplete="email"/></label>
           <label>Пароль<input value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="Не менее 6 символов" type="password" minLength={6} required autoComplete={authMode === "register" ? "new-password" : "current-password"}/></label>
           {authError && <div className="auth-error"><CircleHelp size={15}/>{authError}</div>}
-          <button className="auth-submit" disabled={authBusy}>{authBusy ? <LoaderCircle size={18} className="spinning"/> : <ArrowUp size={18}/>} {authMode === "register" ? "Зарегистрироваться" : "Войти в KapaniGPT"}</button>
+          <button className="auth-submit" disabled={authBusy}>{authBusy ? <LoaderCircle size={18} className="spinning"/> : <ArrowUp size={18}/>} {authMode === "register" ? "Зарегистрироваться" : "Войти в FedyaGPT"}</button>
         </form>
-        {authMode === "register" && <p className="auth-opening-note"><Gift size={15}/> После регистрации можно забрать Kapani AI plus на 7 дней бесплатно — в честь открытия.</p>}
+        {authMode === "register" && <p className="auth-opening-note"><Gift size={15}/> После регистрации можно забрать Fedya AI plus на 7 дней бесплатно — в честь открытия.</p>}
         <p className="auth-footnote">Аккаунт защищён Firebase Authentication. У каждого пользователя отдельная история переписки.</p>
       </> : <div className="auth-loading"><LoaderCircle size={22} className="spinning"/> Проверяю сессию…</div>}
     </div>
   </div>;
 
-  return <div className={"app-shell " + (compact ? "compact-ui" : "")} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); }}>
+  return <div className={"app-shell theme-" + theme + " " + (compact ? "compact-ui" : "")} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); }}>
     {mobileSidebar && <div className="mobile-scrim" onClick={() => setMobileSidebar(false)} />}
     <aside className={"sidebar " + (!sidebar ? "sidebar-closed " : "") + (mobileSidebar ? "mobile-open" : "")}>
-      <div className="sidebar-head"><button className="brand" onClick={newChat}><span className="brand-symbol"><Sparkles size={17} strokeWidth={2.2} /></span><span>Kapani<span className="brand-gpt">GPT</span></span><ChevronDown size={13} className="brand-chev" /></button><button className="icon-button mobile-close" aria-label="Закрыть меню" onClick={() => setMobileSidebar(false)}><X size={18} /></button><button className="icon-button collapse-button" aria-label="Скрыть панель" onClick={() => setSidebar(false)}><PanelLeftClose size={18} /></button></div>
+      <div className="sidebar-head"><button className="brand" onClick={newChat}><span className="brand-symbol"><Sparkles size={17} strokeWidth={2.2} /></span><span>Fedya<span className="brand-gpt">GPT</span></span><ChevronDown size={13} className="brand-chev" /></button><button className="icon-button mobile-close" aria-label="Закрыть меню" onClick={() => setMobileSidebar(false)}><X size={18} /></button><button className="icon-button collapse-button" aria-label="Скрыть панель" onClick={() => setSidebar(false)}><PanelLeftClose size={18} /></button></div>
       <div className="sidebar-top-actions"><button className="side-nav new-chat" onClick={newChat}><Pencil size={17} /><span>Новый чат</span><span className="shortcut">⌘⇧O</span></button><button className="side-nav" onClick={() => setSearchOpen(true)}><Search size={17} /><span>Поиск чатов</span><span className="shortcut">⌘K</span></button></div>
       <div className="sidebar-divider" />
       <div className="sidebar-scroll">{!!pinnedChats.length && <section className="chat-section"><div className="section-caption">Закреплённые</div>{pinnedChats.map(renderChatItem)}</section>}<section className="chat-section"><div className="section-caption">Недавние <span className="count-chip">{recentChats.length}</span></div>{recentChats.length ? recentChats.map(renderChatItem) : <div className="empty-history">Твои диалоги появятся здесь</div>}</section></div>
       <div className="sidebar-bottom">
-        {usage.promoEligible && <div className="opening-offer"><div className="opening-offer-top"><Gift size={18}/><span>Подарок к открытию</span></div><strong>7 дней Kapani AI plus</strong><p>Бесплатно. Один раз на аккаунт. Без привязки карты.</p><button onClick={claimOpeningPromo} disabled={claimingPromo}>{claimingPromo ? <LoaderCircle size={15} className="spinning"/> : <Crown size={15}/>} {claimingPromo ? "Активируем…" : "Забрать бесплатно"}<ChevronRight size={15}/></button>{promoError && <small className="opening-offer-error">{promoError}</small>}</div>}
-        <button className="upgrade-side" onClick={() => setShopOpen(true)}><Crown size={17}/><span>{usage.plan === "free" ? "Улучшить тариф" : tier.name}</span><ChevronRight size={15}/></button><button className="profile" onClick={openSettings}><span className="avatar">K</span><span className="profile-text"><b>{auth.currentUser?.displayName || auth.currentUser?.email || "KapaniGPT"}</b><small>{tier.name}</small></span><Settings2 size={17} /></button></div>
+        {usage.promoEligible && <div className="opening-offer"><div className="opening-offer-top"><Gift size={18}/><span>Подарок к открытию</span></div><strong>7 дней Fedya AI plus</strong><p>Бесплатно. Один раз на аккаунт. Без привязки карты.</p><button onClick={claimOpeningPromo} disabled={claimingPromo}>{claimingPromo ? <LoaderCircle size={15} className="spinning"/> : <Crown size={15}/>} {claimingPromo ? "Активируем…" : "Забрать бесплатно"}<ChevronRight size={15}/></button>{promoError && <small className="opening-offer-error">{promoError}</small>}</div>}
+        <button className="upgrade-side" onClick={() => setShopOpen(true)}><Crown size={17}/><span>{usage.plan === "free" ? "Улучшить тариф" : tier.name}</span><ChevronRight size={15}/></button><button className="profile" onClick={openSettings}><span className="avatar">K</span><span className="profile-text"><b>{auth.currentUser?.displayName || auth.currentUser?.email || "FedyaGPT"}</b><small>{tier.name}</small></span><Settings2 size={17} /></button></div>
     </aside>
     <main className={"main-area " + (!sidebar ? "wide-area" : "")}>
       <header className="topbar"><div className="topbar-left">
         {!sidebar && <button className="icon-button desktop-show" aria-label="Открыть панель" onClick={() => setSidebar(true)}><PanelLeftOpen size={20} /></button>}
         <button className="icon-button mobile-menu" aria-label="Открыть меню" onClick={() => setMobileSidebar(true)}><Menu size={21} /></button>
-        {isFree ? <span className="top-brand-name">KapaniGPT</span> : <div className="mode-switch" title={modeLocked ? "Режим закреплён за этой перепиской. Создай новый чат, чтобы его сменить." : "Выбери режим для нового чата"}>
+        {!canWork ? <span className="top-brand-name">FedyaGPT</span> : <div className="mode-switch" title={modeLocked ? "Режим закреплён за этой перепиской. Создай новый чат, чтобы его сменить." : "Выбери режим для нового чата"}>
           <button className={chatMode === "chat" ? "active" : ""} disabled={modeLocked} onClick={() => changeMode("chat")}><MessageCircle size={15}/> Чат</button>
           <button className={chatMode === "work" ? "active" : ""} disabled={modeLocked} onClick={() => changeMode("work")}><Code2 size={15}/> Работа</button>
           {modeLocked && <LockKeyhole size={13} className="mode-lock"/>}
         </div>}
-      </div><div className="topbar-right">{usage.promoEligible && <button className="mobile-promo-button" onClick={claimOpeningPromo} disabled={claimingPromo} title="7 дней Kapani AI plus бесплатно"><Gift size={16}/> Plus на 7 дней</button>}<button className="usage-chip" onClick={() => { setSettingsTab("limits"); setSettingsOpen(true); }} title="Общий лимит и токены"><span className="usage-chip-track"><span style={{ width: activeRemaining + "%" }}/></span>{activeRemaining}%{usage.tokensBalance > 0 && <span className="token-counter"><Zap size={12}/>{usage.tokensBalance}</span>}</button><button className="icon-button" title="Настройки" onClick={openSettings}><Settings2 size={19}/></button>{chatId && <button className="icon-button export-button" title="Экспорт чата" onClick={exportChat}><Download size={18}/></button>}</div></header>
+      </div><div className="topbar-right"><button className="icon-button theme-button" title={theme === "dark" ? "Светлая тема" : "Тёмная тема"} aria-label="Сменить тему" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun size={18}/> : <Moon size={18}/>}</button>{usage.promoEligible && <button className="mobile-promo-button" onClick={claimOpeningPromo} disabled={claimingPromo} title="7 дней Fedya AI plus бесплатно"><Gift size={16}/> Plus на 7 дней</button>}<button className="usage-chip" onClick={() => { setSettingsTab("limits"); setSettingsOpen(true); }} title="Лимиты"><span className="usage-chip-track"><span style={{ width: activeRemaining + "%" }}/></span>{activeRemaining}%</button><button className="icon-button" title="Настройки" onClick={openSettings}><Settings2 size={19}/></button>{chatId && <button className="icon-button export-button" title="Экспорт чата" onClick={exportChat}><Download size={18}/></button>}</div></header>
       <div className={"chat-viewport " + (!messages.length && !streaming ? "is-home" : "")}>
         {!messages.length && !streaming ? <div className="home-content"><div className="hero-emblem"><Sparkles size={27} strokeWidth={1.7} /></div><h1>{chatMode === "work" ? "С чем поработаем?" : "С чего начнём?"}</h1><p>{chatMode === "work" ? "Код, документы и сложные задачи." : "Просто напиши, что нужно."}</p><div className="suggestions"><button onClick={() => { setPrompt("Придумай интересную идею для нового проекта и распиши, как её реализовать."); inputRef.current?.focus(); }}><WandSparkles size={16} /> Идея <ChevronRight size={14} /></button><button onClick={() => { setPrompt("Помоги мне написать чистый и понятный код."); inputRef.current?.focus(); }}><Code2 size={16} /> Код <ChevronRight size={14} /></button><button onClick={() => { setPrompt("Объясни сложную тему простыми словами, с примером."); inputRef.current?.focus(); }}><CircleHelp size={16} /> Разобраться <ChevronRight size={14} /></button></div></div>
         : <div className="conversation"><div className="conversation-title">{activeTitle || "Новый чат"}</div>
@@ -668,52 +624,41 @@ export default function Home() {
         </div>}
       </div>
       <div className={"composer-dock " + (!messages.length && !streaming ? "home-composer" : "")}><div className="composer-wrap">{error && <div className="error-banner"><CircleHelp size={16} /><span>{error}</span><button onClick={() => setError("")}><X size={15} /></button></div>}{authError && <div className="error-banner"><CircleHelp size={16} /><span>{authError}</span></div>}<div className={"composer " + (streaming ? "is-generating" : "")}>{!!attachments.length && <div className="attachment-list">{attachments.map((a,i) => <div className="attachment-chip" key={i}>{a.data ? <img src={a.data} alt="" /> : <span className="file-square"><FileCode2 size={17} /></span>}<div><b title={a.name}>{a.name}</b><small>{prettySize(a.size)}</small></div><button aria-label={"Убрать " + a.name} onClick={() => setAttachments(old => old.filter((_, index) => index !== i))}><X size={14} /></button></div>)}</div>}
-        <textarea ref={inputRef} rows={2} value={prompt} onChange={e => setPrompt(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); askAI(); } }} placeholder="Спроси что угодно" aria-label="Сообщение для KapaniGPT" />
+        <textarea ref={inputRef} rows={2} value={prompt} onChange={e => setPrompt(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); askAI(); } }} placeholder="Спроси что угодно" aria-label="Сообщение для FedyaGPT" />
         <div className="composer-toolbar"><div className="tool-left">
           <input ref={fileRef} type="file" hidden multiple accept="image/png,image/jpeg,image/webp,.txt,.md,.csv,.json,.js,.ts,.tsx,.jsx,.py,.html,.css,.xml,.yaml,.yml,.log,.sql" onChange={e => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} />
           <button className="tool-icon" title="Прикрепить файл" onClick={() => fileRef.current?.click()} disabled={uploading || attachments.length >= 4}><Plus size={21}/></button>
           <span className="toolbar-divider"/>
-          {chatMode === "work" && !isFree && <div className="model-trigger composer-model-trigger"><button className="model-pill model-selector" onClick={() => { setModelOpen(!modelOpen); setReasoningOpen(false); }}><Sparkles size={14}/><span>{modelName}</span><ChevronDown size={13}/></button>{modelOpen && <div className="model-dropdown composer-model-dropdown"><div className="dropdown-label">Модель KapaniGPT</div>{MODEL_CHOICES.map((m, index) => <button key={m.id} style={{ animationDelay: index * 55 + "ms" }} className={"model-option animated-choice " + (model === m.id ? "selected" : "")} onClick={() => { setModel(m.id); setModelOpen(false); }}><span className="model-option-mark"><Sparkles size={17}/></span><span><b>{m.name}</b><small>{m.detail}</small></span>{model === m.id && <Check size={16}/>}</button>)}</div>}</div>}
+          {chatMode === "work" && canWork && <div className="model-trigger composer-model-trigger"><button className="model-pill model-selector" onClick={() => { setModelOpen(!modelOpen); setReasoningOpen(false); }}><Sparkles size={14}/><span>{modelName}</span><ChevronDown size={13}/></button>{modelOpen && <div className="model-dropdown composer-model-dropdown"><div className="dropdown-label">Выбор профиля</div>{MODEL_CHOICES.map((m, index) => <button key={m.id} style={{ animationDelay: index * 55 + "ms" }} className={"model-option animated-choice " + (model === m.id ? "selected" : "")} onClick={() => { setModel(m.id); setModelOpen(false); }}><span className="model-option-mark"><Sparkles size={17}/></span><span><b>{m.name}</b><small>{m.detail}</small></span>{model === m.id && <Check size={16}/>}</button>)}</div>}</div>}
           <div className="reasoning-wrapper"><button className={"tool-mode reasoning-mode animated-choice " + (reasoning !== "off" ? "activated " : "") + (reasoning === "maximum" && chatMode === "work" ? "max-reasoning" : "")} onClick={() => {
-            if (isFree) setReasoning(reasoning === "off" ? "medium" : "off");
-            else { setReasoningOpen(!reasoningOpen); setModelOpen(false); }
-          }}><BrainCircuit size={15}/><span className={reasoning === "maximum" && chatMode === "work" ? "max-reasoning-label" : ""}>{reasoning === "off" ? "Без рассуждения" : isFree ? "Рассуждение · вкл" : REASONING.find(r => r.id === reasoning)?.name}</span>{!isFree && <ChevronDown size={12}/>}</button>
-            {reasoningOpen && !isFree && <div className={"reasoning-menu reasoning-panel " + (reasoning === "maximum" && chatMode === "work" ? "max-active" : "")}>
+            setReasoningOpen(!reasoningOpen); setModelOpen(false);
+          }}><BrainCircuit size={15}/><span className={reasoning === "maximum" && chatMode === "work" ? "max-reasoning-label" : ""}>{reasoning === "off" ? "Без рассуждения" : REASONING.find(r => r.id === reasoning)?.name}</span><ChevronDown size={12}/></button>
+            {reasoningOpen && <div className={"reasoning-menu reasoning-panel " + (reasoning === "maximum" && chatMode === "work" ? "max-active" : "")}>
               <div className="reasoning-heading">{chatMode === "work" ? "Глубина рассуждений · Работа" : "Уровень рассуждения"}</div>
               <div className={"reasoning-current " + (reasoning === "maximum" && chatMode === "work" ? "max-reasoning-label" : "")}>{reasoning === "off" ? "Выключено" : REASONING.find(r => r.id === reasoning)?.name}</div>
-              <input aria-label="Уровень рассуждения" type="range" min={0} max={reasoningOptions.length - 1} step={1} value={reasoningIndex} style={{ "--range-progress": (reasoningIndex / (reasoningOptions.length - 1) * 100) + "%" } as React.CSSProperties} onChange={e => setReasoning(reasoningOptions[Number(e.target.value)])}/>
-              <div className="reasoning-range-labels">{(chatMode === "work" ? ["Выкл.", "Низк.", "Средн.", "Выс.", "Очень", "Макс."] : ["Выкл.", "Низкий", "Средний", "Высокий"]).map((label, i) => <span key={label} className={reasoningIndex === i ? "selected" : ""} onClick={() => setReasoning(reasoningOptions[i])}>{label}</span>)}</div>
+              <input aria-label="Уровень рассуждения" type="range" min={0} max={reasoningOptions.length - 1} step={0.01} value={reasoningPosition} style={{ "--range-progress": (reasoningPosition / (reasoningOptions.length - 1) * 100) + "%" } as React.CSSProperties} onChange={e => { const position = Number(e.target.value); setReasoningPosition(position); setReasoning(reasoningOptions[Math.round(position)]); }} onPointerUp={() => setReasoningPosition(reasoningIndex)} onKeyDown={e => { if (e.key === "ArrowRight" || e.key === "ArrowLeft") { e.preventDefault(); const index = Math.max(0, Math.min(reasoningOptions.length - 1, reasoningIndex + (e.key === "ArrowRight" ? 1 : -1))); setReasoning(reasoningOptions[index]); setReasoningPosition(index); } }}/>
+              <div className="reasoning-range-labels">{(chatMode === "work" ? ["Выкл.", "Низк.", "Средн.", "Выс.", "Очень", "Макс."] : ["Выкл.", "Низкий", "Средний", "Высокий"]).map((label, i) => <span key={label} className={reasoningIndex === i ? "selected" : ""} onClick={() => { setReasoning(reasoningOptions[i]); setReasoningPosition(i); }}>{label}</span>)}</div>
             </div>}
           </div>
           {chatMode === "work" && <span className="composer-work-label"><Code2 size={13}/><span>Работа</span></span>}
-        </div><div className="tool-right"><button className="tool-icon mic" title="Голосовой ввод" onClick={recordVoice}><AudioLines size={18}/></button>{streaming ? <button className="send-button" title="Остановить" onClick={stopGeneration}><Square size={14} fill="currentColor"/></button> : <button className="send-button" title="Отправить" disabled={(!prompt.trim() && !attachments.length) || !uid || uploading} onClick={() => askAI()}><ArrowUp size={19} strokeWidth={2.5}/></button>}</div></div></div><p className="composer-note">Общий лимит · {activeRemaining}% на 5 ч · {activeWeeklyRemaining}% на неделю{usage.tokensBalance > 0 ? ` · ${usage.tokensBalance} токенов` : ""}{!preferences.historyEnabled ? " · Без сохранения истории" : ""} <button className="composer-buy-tokens" onClick={() => { setShopTab("tokens"); setShopOpen(true); }}>Пополнить</button></p></div></div>
+        </div><div className="tool-right"><button className="tool-icon mic" title="Голосовой ввод" onClick={recordVoice}><AudioLines size={18}/></button>{streaming ? <button className="send-button" title="Остановить" onClick={stopGeneration}><Square size={14} fill="currentColor"/></button> : <button className="send-button" title="Отправить" disabled={(!prompt.trim() && !attachments.length) || !uid || uploading} onClick={() => askAI()}><ArrowUp size={19} strokeWidth={2.5}/></button>}</div></div></div><p className="composer-note">Общий лимит · {activeRemaining}% на 5 ч · {activeWeeklyRemaining}% на неделю{!preferences.historyEnabled ? " · Без сохранения истории" : ""} </p></div></div>
     </main>
-    {shopOpen && <div className="overlay" onClick={() => { setShopOpen(false); setCheckoutPlan(null); setCheckoutPack(null); setShopError(""); }}><div className="shop-dialog" onClick={e => e.stopPropagation()}>
-      <div className="shop-head"><span className="shop-eyebrow"><Sparkles size={15}/> Kapani AI</span><button className="icon-button" onClick={() => { setShopOpen(false); setCheckoutPlan(null); setCheckoutPack(null); }}><X size={20}/></button><h2>Больше возможностей.<br/><span>Твой выбор.</span></h2><p>Одна шкала лимита для чата и работы. Когда он закончится, помогут купленные токены.</p></div>
-      <div className="shop-tabs"><button className={shopTab === "plans" ? "active" : ""} onClick={() => { setShopTab("plans"); setCheckoutPack(null); setShopError(""); }}><Crown size={16}/> Подписки</button><button className={shopTab === "tokens" ? "active" : ""} onClick={() => { setShopTab("tokens"); setCheckoutPlan(null); setShopError(""); }}><Zap size={16}/> Купить токены</button></div>
-      {shopTab === "plans" && <>
+    {shopOpen && <div className="overlay" onClick={() => { setShopOpen(false); setCheckoutPlan(null); setShopError(""); }}><div className="shop-dialog" onClick={e => e.stopPropagation()}>
+      <div className="shop-head"><span className="shop-eyebrow"><Sparkles size={15}/> Fedya AI</span><button className="icon-button" onClick={() => { setShopOpen(false); setCheckoutPlan(null); }}><X size={20}/></button><h2>Подписка Fedya AI</h2><p>Лимиты на 5 часов и на неделю. В режиме «Работа» расходы зависят от профиля и глубины рассуждения.</p></div>
+      <>
       <div className="limit-panel"><div className="limit-label"><span>Пятичасовой лимит</span><b>{usage.remainingFiveHourPercent}% осталось</b></div><div className="limit-track"><span style={{ width: usage.remainingFiveHourPercent + "%" }}/></div><div className="limit-label secondary"><span>Недельный лимит</span><b>{usage.remainingPercent}% осталось</b></div><div className="limit-track"><span style={{ width: usage.remainingPercent + "%" }}/></div><div className="limit-meta">Пятичасовой лимит обновится {usage.fiveHourResetsAt ? new Date(usage.fiveHourResetsAt).toLocaleTimeString("ru-RU", {hour:"2-digit", minute:"2-digit"}) : "скоро"} · Тариф {tier.name}{usage.expiresAt && usage.plan !== "free" ? " до " + new Date(usage.expiresAt).toLocaleDateString("ru-RU") : ""}</div></div>
-      {usage.nickname && <div className="balance-line"><Wallet size={17}/><span>Баланс {usage.nickname}</span><strong>{(usage.balance || 0).toLocaleString("ru-RU")} ₽</strong></div>}
-      <div className="plans-grid">{(["free", "plus", "ultra", "prime"] as Plan[]).map(plan => <div key={plan} className={"plan-card plan-" + plan + (usage.plan === plan ? " current" : "")}>
-        <div className="plan-card-top"><span className="plan-icon">{plan === "free" ? <Sparkles size={17}/> : <Crown size={17}/>}</span>{usage.plan === plan && <span className="current-tag">Текущий</span>}</div><h3>{PLANS[plan].name}</h3><div className="plan-price">{plan === "free" ? "0 ₽" : PLANS[plan].price.toLocaleString("ru-RU") + " ₽"}<small>{plan === "free" ? "навсегда" : "/ неделю"}</small></div><div className="plan-perks"><span><Check size={13}/> {plan === "free" ? "Обычный чат" : "Режим «Работа» и все модели"}</span><span><Check size={13}/> {plan === "free" ? "Рассуждение вкл./выкл." : "Ползунки рассуждения, включая максимум"}</span><span><Zap size={13}/> Общий лимит · {PLANS[plan].fiveHourBudget} ед./5 ч</span><span><Check size={13}/> Чат расходует меньше, чем работа</span></div><button className="plan-choose" disabled={plan === "free" || usage.plan === plan} onClick={() => { setCheckoutPlan(plan); setShopError(""); }}>{usage.plan === plan ? "Ваш тариф" : plan === "free" ? "Бесплатно" : "Подключить"}</button>
+      <div className="plans-grid">{(["free", "plus", "pro", "ultra", "max"] as Plan[]).map(plan => <div key={plan} className={"plan-card plan-" + plan + (usage.plan === plan ? " current" : "")}>
+        <div className="plan-card-top"><span className="plan-icon">{plan === "free" ? <Sparkles size={17}/> : <Crown size={17}/>}</span>{usage.plan === plan && <span className="current-tag">Текущий</span>}</div><h3>{PLANS[plan].name}</h3><div className="plan-price">{plan === "free" ? "0 ₽" : PLANS[plan].price.toLocaleString("ru-RU") + " ₽"}<small>{plan === "free" ? "навсегда" : "/ месяц"}</small></div><div className="plan-perks"><span><Check size={13}/> {plan === "free" ? "Чат · около 25 сообщений в день" : plan === "plus" ? "Чат · около 80 сообщений в день" : plan === "pro" ? "Работа и все профили · чат до 150/день" : "Работа и все профили · чат безлимитный"}</span><span><Check size={13}/> {plan === "free" ? "Все уровни чата" : plan === "plus" ? "Все уровни чата" : "Рассуждение до максимума"}</span><span><Zap size={13}/> Общий лимит · {PLANS[plan].fiveHourBudget} ед./5 ч</span><span><Check size={13}/> {plan === "free" || plan === "plus" ? "Работа недоступна" : `lion max · около ${plan === "pro" ? 2 : plan === "ultra" ? 7 : 18} запросов за 5 ч`}</span></div><button className="plan-choose" disabled={plan === "free" || usage.plan === plan} onClick={() => { setCheckoutPlan(plan); setShopError(""); }}>{usage.plan === plan ? "Ваш тариф" : plan === "free" ? "Бесплатно" : "Подключить"}</button>
       </div>)}</div>
-      {checkoutPlan && checkoutPlan !== "free" && <div className="checkout-panel"><div className="checkout-heading"><h3>Оплата {PLANS[checkoutPlan].name}</h3><button onClick={() => setCheckoutPlan(null)}><X size={17}/></button></div><p>Разовое списание {PLANS[checkoutPlan].price} капанёвских рублей за 7 дней. Подписка зачисляется на аккаунт KapaniGPT {auth.currentUser?.email}. Автопродления нет.</p><div className="checkout-new"><strong>Что откроется после покупки</strong><span><Code2 size={14}/> Режим «Работа» и выбор всех моделей KapaniGPT</span><span><BrainCircuit size={14}/> Ползунок глубины рассуждений до максимума</span><span><Zap size={14}/> Общий лимит {PLANS[checkoutPlan].fiveHourBudget} ед./5 ч и {PLANS[checkoutPlan].weeklyBudget} ед./нед.</span></div>{!kapaniSession ? <div className="login-box"><div className="login-description"><LogIn size={17}/> Авторизуйся для оплаты со счёта сайта «Капани»</div><input value={loginNick} onChange={e => setLoginNick(e.target.value)} placeholder="Ник или e-mail в Капани" autoComplete="username"/><input value={loginPassword} onChange={e => setLoginPassword(e.target.value)} type="password" placeholder="Пароль Капани" autoComplete="current-password" onKeyDown={e => { if (e.key === "Enter") loginKapani(); }}/><button className="pay-button" onClick={loginKapani} disabled={loggingIn}>{loggingIn ? <LoaderCircle className="spinning" size={16}/> : <LogIn size={16}/>} Проверить счёт</button></div> : <div className="checkout-confirm"><div className="checkout-account"><Wallet size={17}/> Банк Капаней · {kapaniBank?.nickname || "Счёт подтверждается"} · {kapaniBank == null ? "Баланс загружается" : kapaniBank.balance.toLocaleString("ru-RU") + " ₽"}</div><button className="pay-button" disabled={buying} onClick={() => buyPlan(checkoutPlan)}>{buying ? <LoaderCircle className="spinning" size={16}/> : <Check size={16}/>} Оплатить {PLANS[checkoutPlan].price} ₽</button></div>}{shopError && <div className="checkout-error">{shopError}</div>}</div>}
-      </>}
-      {shopTab === "tokens" && <>
-        <div className="token-balance-hero"><div className="token-orb"><Zap size={22}/></div><div><small>Твой запас</small><strong>{usage.tokensBalance.toLocaleString("ru-RU")} токенов</strong><p>После исчерпания общего лимита запросы автоматически оплачиваются отсюда. Токены не имеют срока действия.</p></div></div>
-        <div className="token-packs">{(Object.keys(TOKEN_PACKS) as TokenPack[]).map(pack => <div key={pack} className={"token-pack " + (checkoutPack === pack ? "selected" : "")}><div className="token-pack-icon"><Zap size={20}/></div><small>{TOKEN_PACKS[pack].name} пакет</small><h3>{TOKEN_PACKS[pack].tokens.toLocaleString("ru-RU")} <span>токенов</span></h3><div className="token-pack-price">{TOKEN_PACKS[pack].price.toLocaleString("ru-RU")} капанёвских ₽</div><button className="plan-choose" onClick={() => { setCheckoutPack(pack); setShopError(""); }}>Выбрать пакет</button></div>)}</div>
-        {checkoutPack && <div className="checkout-panel"><div className="checkout-heading"><h3>Покупка {TOKEN_PACKS[checkoutPack].tokens} токенов</h3><button onClick={() => setCheckoutPack(null)}><X size={17}/></button></div><p>С банковского счёта Капаней спишется {TOKEN_PACKS[checkoutPack].price} ₽. Токены зачислятся на аккаунт KapaniGPT {auth.currentUser?.email}. Подписка не меняется.</p><p className="receipt-disclosure">В банковской истории операция отображается как «{PLANS[TOKEN_PACKS[checkoutPack].bankPlan].name}», потому что банк использует его фиксированный платёж. Это покупка токенов, а не тарифа.</p>
-          {!kapaniSession ? <div className="login-box"><div className="login-description"><LogIn size={17}/> Войди в банк Капаней для оплаты</div><input value={loginNick} onChange={e => setLoginNick(e.target.value)} placeholder="Ник или e-mail в Капани" autoComplete="username"/><input value={loginPassword} onChange={e => setLoginPassword(e.target.value)} type="password" placeholder="Пароль Капани" autoComplete="current-password" onKeyDown={e => { if (e.key === "Enter") loginKapani(); }}/><button className="pay-button" onClick={loginKapani} disabled={loggingIn}>{loggingIn ? <LoaderCircle className="spinning" size={16}/> : <LogIn size={16}/>} Проверить счёт</button></div> : <div className="checkout-confirm"><div className="checkout-account"><Wallet size={17}/> {kapaniBank?.nickname || "Счёт"} · {kapaniBank == null ? "Баланс загружается" : kapaniBank.balance.toLocaleString("ru-RU") + " ₽"}</div><button className="pay-button" disabled={buyingTokens} onClick={() => buyTokenPack(checkoutPack)}>{buyingTokens ? <LoaderCircle className="spinning" size={16}/> : <Zap size={16}/>} Оплатить {TOKEN_PACKS[checkoutPack].price} ₽</button></div>}{shopError && <div className="checkout-error">{shopError}</div>}
-        </div>}
-        <p className="token-shop-note">Токен здесь означает единицу внутреннего лимита KapaniGPT, а не токен текста нейросети. Обычный чат расходует 1–3 единицы за ответ, работа — больше в зависимости от модели и уровня рассуждения.</p>
-      </>}
-      <div className="shop-footer">Расход лимитов приблизительный и зависит от выбранного профиля. Ответы создают бесплатные модели Kilo AI, поэтому у провайдера есть собственный предел нагрузки независимо от подписки KapaniGPT.</div>
+      {checkoutPlan && checkoutPlan !== "free" && <div className="checkout-panel"><div className="checkout-heading"><h3>{PLANS[checkoutPlan].name}</h3><button onClick={() => setCheckoutPlan(null)}><X size={17}/></button></div><p>{PLANS[checkoutPlan].price} ₽ за месяц. Оплата откроется на защищённой странице ЮKassa. Автопродления нет.</p><p>Доступ и лимиты появятся после подтверждения платежа.</p><button className="pay-button" onClick={() => buyPlan(checkoutPlan)} disabled={buying || !billingReady}>{!billingReady ? "Оплата пока не подключена" : buying ? "Открываю оплату…" : `Перейти к оплате · ${PLANS[checkoutPlan].price} ₽`}</button>{shopError && <div className="checkout-error">{shopError}</div>}</div>}
+      </>
+      <div className="shop-footer">Лимиты приблизительные. У внешнего провайдера также бывают ограничения нагрузки.</div>
     </div></div>}
-    {unlockSteps.length > 0 && <div className="overlay unlock-overlay"><div className="unlock-dialog" key={unlockIndex}><div className="unlock-aura"><Gift size={31}/></div><span className="unlock-count">{unlockIndex + 1} из {unlockSteps.length}</span><h2>{unlockSteps[unlockIndex]}</h2><p>Новые возможности уже доступны в KapaniGPT.</p><button className="pay-button" onClick={() => { if (unlockIndex >= unlockSteps.length - 1) { setUnlockSteps([]); setUnlockIndex(0); } else setUnlockIndex(unlockIndex + 1); }}>{unlockIndex === unlockSteps.length - 1 ? "Начать пользоваться" : "Продолжить"}<ChevronRight size={16}/></button></div></div>}
-    {searchOpen && <div className="overlay" onClick={() => setSearchOpen(false)}><div className="search-dialog" onClick={e => e.stopPropagation()}><div className="search-field"><Search size={20} /><input autoFocus placeholder="Поиск по истории чатов…" value={search} onChange={e => setSearch(e.target.value)} /><button onClick={() => setSearchOpen(false)}><X size={18} /></button></div><div className="search-results">{groupedChats.length ? groupedChats.map(c => <button key={c.id} onClick={() => { setChatId(c.id); setChatMode(c.mode); setTemporaryChatStarted(false); setReasoning("off"); setSearchOpen(false); setMobileSidebar(false); }}><MessageCircle size={16} /><span>{c.title}</span><small>{niceDate(c.updatedAt)}</small></button>) : <p>Совпадений пока нет</p>}</div><div className="search-hint">Esc — закрыть</div></div></div>}
+    {unlockSteps.length > 0 && <div className="overlay unlock-overlay"><div className="unlock-dialog" key={unlockIndex}><div className="unlock-aura"><Gift size={31}/></div><span className="unlock-count">{unlockIndex + 1} из {unlockSteps.length}</span><h2>{unlockSteps[unlockIndex]}</h2><p>Новые возможности уже доступны в FedyaGPT.</p><button className="pay-button" onClick={() => { if (unlockIndex >= unlockSteps.length - 1) { setUnlockSteps([]); setUnlockIndex(0); } else setUnlockIndex(unlockIndex + 1); }}>{unlockIndex === unlockSteps.length - 1 ? "Начать пользоваться" : "Продолжить"}<ChevronRight size={16}/></button></div></div>}
+    {searchOpen && <div className="overlay" onClick={() => setSearchOpen(false)}><div className="search-dialog" onClick={e => e.stopPropagation()}><div className="search-field"><Search size={20} /><input autoFocus placeholder="Поиск по истории чатов…" value={search} onChange={e => setSearch(e.target.value)} /><button onClick={() => setSearchOpen(false)}><X size={18} /></button></div><div className="search-results">{groupedChats.length ? groupedChats.map(c => <button key={c.id} onClick={() => { setChatId(c.id); setChatMode(c.mode); setTemporaryChatStarted(false); setReasoning("off"); setReasoningPosition(0); setSearchOpen(false); setMobileSidebar(false); }}><MessageCircle size={16} /><span>{c.title}</span><small>{niceDate(c.updatedAt)}</small></button>) : <p>Совпадений пока нет</p>}</div><div className="search-hint">Esc — закрыть</div></div></div>}
     {settingsOpen && <div className="overlay" onClick={() => setSettingsOpen(false)}>
       <div className="settings-dialog" onClick={e => e.stopPropagation()}>
-        <div className="dialog-top"><span className="dialog-icon"><Settings2 size={20}/></span><div><h2>Настройки</h2><p>KapaniGPT · {tier.name}</p></div><button onClick={() => setSettingsOpen(false)} aria-label="Закрыть"><X size={19}/></button></div>
+        <div className="dialog-top"><span className="dialog-icon"><Settings2 size={20}/></span><div><h2>Настройки</h2><p>FedyaGPT · {tier.name}</p></div><button onClick={() => setSettingsOpen(false)} aria-label="Закрыть"><X size={19}/></button></div>
         <div className="settings-main">
           <nav className="settings-tabs" aria-label="Раздел настроек">
             <button className={settingsTab === "account" ? "active" : ""} onClick={() => setSettingsTab("account")}><ShieldCheck size={16}/> Аккаунт</button>
@@ -723,11 +668,11 @@ export default function Home() {
             <button className={settingsTab === "appearance" ? "active" : ""} onClick={() => setSettingsTab("appearance")}><Settings2 size={16}/> Интерфейс</button>
           </nav>
           <div className="settings-content">
-            {settingsTab === "account" && <div className="settings-section"><h3>Аккаунт</h3><div className="settings-account-card"><span className="avatar">K</span><div><strong>{auth.currentUser?.displayName || "Пользователь"}</strong><small>{auth.currentUser?.email}</small></div></div>{usage.promoEligible && <div className="opening-offer account-offer"><div className="opening-offer-top"><Gift size={18}/><span>В честь открытия KapaniGPT</span></div><strong>Kapani AI plus на неделю бесплатно</strong><p>Забери подарок один раз. Оплата не нужна.</p><button onClick={claimOpeningPromo} disabled={claimingPromo}>{claimingPromo ? "Активируем…" : "Получить бесплатно"}<ChevronRight size={15}/></button>{promoError && <small className="opening-offer-error">{promoError}</small>}</div>}<div className="settings-row"><div><strong>Подписка</strong><small>{usage.expiresAt ? "До " + new Date(usage.expiresAt).toLocaleDateString("ru-RU") : "Бессрочная бесплатная"}</small></div><span className="settings-value">{tier.name}</span></div>{usage.promoClaimed && usage.promoStartsAt && <div className="settings-row"><div><strong>Подарочная неделя Plus</strong><small>{new Date(usage.promoStartsAt).getTime() > Date.now() ? "Начнётся " + new Date(usage.promoStartsAt).toLocaleDateString("ru-RU") : "Уже получена"}</small></div><span className="settings-value">Использована</span></div>}<button className="settings-plan-button" onClick={() => { setSettingsOpen(false); setShopOpen(true); }}><Crown size={16}/> Подписки и оплата <ChevronRight size={16}/></button>{kapaniSession && <button className="settings-logout" onClick={() => { setKapaniSession(null); setKapaniBank(null); }}>Отключить банк Капаней</button>}<button className="settings-logout" onClick={() => { stopGeneration(); setSettingsOpen(false); signOut(auth).catch(e => setAuthError(e.message)); }}>Выйти из аккаунта</button></div>}
-            {settingsTab === "personal" && <div className="settings-section"><h3>Персонализация</h3><p className="settings-intro">KapaniGPT учтёт твои предпочтения во всех новых ответах.</p><label className="settings-field">Что ИИ стоит знать о тебе<textarea rows={4} maxLength={1500} value={preferences.about} onChange={e => setPreferences(old => ({ ...old, about: e.target.value }))} placeholder="Интересы, занятия, контекст…"/></label><label className="settings-field">Как лучше отвечать<textarea rows={4} maxLength={3000} value={preferences.instructions} onChange={e => setPreferences(old => ({ ...old, instructions: e.target.value }))} placeholder="Тон, длина ответов, любимый стиль…"/></label><label className="settings-field">Манера общения<select value={preferences.tone} onChange={e => setPreferences(old => ({ ...old, tone: e.target.value as UserPreferences["tone"] }))}><option value="balanced">Обычная</option><option value="direct">Коротко и прямо</option><option value="creative">Творческая</option><option value="rough">Дерзкая, с матами</option></select></label></div>}
-            {settingsTab === "privacy" && <div className="settings-section"><h3>Конфиденциальность</h3><div className="settings-row"><div><strong>Сохранять историю чатов</strong><small>Если выключить, новые сообщения останутся только до перезагрузки страницы. Старые чаты не удаляются.</small></div><button role="switch" aria-checked={preferences.historyEnabled} className={"settings-toggle " + (preferences.historyEnabled ? "on" : "")} onClick={() => setPreferences(old => ({ ...old, historyEnabled: !old.historyEnabled }))}><span/></button></div><div className="settings-row"><div><strong>Удалить сохранённые чаты</strong><small>Все диалоги и сообщения из Firebase. Восстановить нельзя.</small></div><button className="settings-danger" onClick={() => setConfirmDeleteAll(true)}>Удалить</button></div><div className="privacy-note"><ShieldCheck size={17}/><p>Тексты, файлы и прикреплённые изображения передаются внешнему ИИ-провайдеру для обработки. Бесплатный провайдер может сохранять данные для улучшения своих моделей. Не прикрепляй конфиденциальные документы, личные фотографии других людей и пароли. Выключение истории отключает хранение в KapaniGPT, но не обработку у провайдера.</p></div></div>}
-            {settingsTab === "limits" && <div className="settings-section"><h3>Общие лимиты</h3><p className="settings-intro">Один запас на «Чат» и «Работу». Чат тратит всего 1–3 единицы, работа расходует больше в зависимости от модели и рассуждений.</p><div className="quota-card"><div className="quota-heading"><Zap size={16}/><strong>Общий лимит · {tier.name}</strong></div><div className="quota-line"><span>На 5 часов</span><b>{usage.remainingFiveHourPercent}% осталось</b></div><div className="limit-track"><span style={{ width: usage.remainingFiveHourPercent + "%" }}/></div><small>Всего {usage.fiveHourBudget} единиц</small><div className="quota-line"><span>На неделю</span><b>{usage.remainingPercent}% осталось</b></div><div className="limit-track"><span style={{ width: usage.remainingPercent + "%" }}/></div><small>Всего {usage.weeklyBudget} единиц</small></div><div className="quota-card token-quota"><div className="quota-heading"><Wallet size={16}/><strong>Купленные токены</strong></div><div className="token-quota-amount">{usage.tokensBalance.toLocaleString("ru-RU")}</div><p className="settings-intro">Не сгорают. После окончания лимита списываются автоматически, при ошибке модели возвращаются.</p><button className="settings-plan-button" onClick={() => { setSettingsOpen(false); setShopTab("tokens"); setShopOpen(true); }}><Zap size={16}/> Купить токены <ChevronRight size={16}/></button></div><p className="settings-intro">Пятичасовой лимит обновится {usage.fiveHourResetsAt ? new Date(usage.fiveHourResetsAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "скоро"}. У ИИ-провайдера есть собственные ограничения нагрузки.</p><button className="settings-plan-button" onClick={() => { setSettingsOpen(false); setShopTab("plans"); setShopOpen(true); }}><Crown size={16}/> Сменить тариф <ChevronRight size={16}/></button></div>}
-            {settingsTab === "appearance" && <div className="settings-section"><h3>Интерфейс</h3><div className="settings-row"><div><strong>Компактный режим</strong><small>Меньше отступов и декоративных элементов.</small></div><button role="switch" aria-checked={compact} className={"settings-toggle " + (compact ? "on" : "")} onClick={() => setCompact(!compact)}><span/></button></div><div className="settings-row"><div><strong>Цветовая схема</strong><small>Тёмная основа, зелёные градиенты.</small></div><span className="settings-value">Чёрно-зелёная</span></div></div>}
+            {settingsTab === "account" && <div className="settings-section"><h3>Аккаунт</h3><div className="settings-account-card"><span className="avatar">K</span><div><strong>{auth.currentUser?.displayName || "Пользователь"}</strong><small>{auth.currentUser?.email}</small></div></div>{usage.promoEligible && <div className="opening-offer account-offer"><div className="opening-offer-top"><Gift size={18}/><span>В честь открытия FedyaGPT</span></div><strong>Fedya AI plus на неделю бесплатно</strong><p>Забери подарок один раз. Оплата не нужна.</p><button onClick={claimOpeningPromo} disabled={claimingPromo}>{claimingPromo ? "Активируем…" : "Получить бесплатно"}<ChevronRight size={15}/></button>{promoError && <small className="opening-offer-error">{promoError}</small>}</div>}<div className="settings-row"><div><strong>Подписка</strong><small>{usage.expiresAt ? "До " + new Date(usage.expiresAt).toLocaleDateString("ru-RU") : "Бессрочная бесплатная"}</small></div><span className="settings-value">{tier.name}</span></div>{usage.promoClaimed && usage.promoStartsAt && <div className="settings-row"><div><strong>Подарочная неделя Plus</strong><small>{new Date(usage.promoStartsAt).getTime() > Date.now() ? "Начнётся " + new Date(usage.promoStartsAt).toLocaleDateString("ru-RU") : "Уже получена"}</small></div><span className="settings-value">Использована</span></div>}<button className="settings-plan-button" onClick={() => { setSettingsOpen(false); setShopOpen(true); }}><Crown size={16}/> Подписки и оплата <ChevronRight size={16}/></button><button className="settings-logout" onClick={() => { stopGeneration(); setSettingsOpen(false); signOut(auth).catch(e => setAuthError(e.message)); }}>Выйти из аккаунта</button></div>}
+            {settingsTab === "personal" && <div className="settings-section"><h3>Персонализация</h3><p className="settings-intro">FedyaGPT учтёт твои предпочтения во всех новых ответах.</p><label className="settings-field">Что ИИ стоит знать о тебе<textarea rows={4} maxLength={1500} value={preferences.about} onChange={e => setPreferences(old => ({ ...old, about: e.target.value }))} placeholder="Интересы, занятия, контекст…"/></label><label className="settings-field">Как лучше отвечать<textarea rows={4} maxLength={3000} value={preferences.instructions} onChange={e => setPreferences(old => ({ ...old, instructions: e.target.value }))} placeholder="Тон, длина ответов, любимый стиль…"/></label><label className="settings-field">Манера общения<select value={preferences.tone} onChange={e => setPreferences(old => ({ ...old, tone: e.target.value as UserPreferences["tone"] }))}><option value="balanced">Обычная</option><option value="direct">Коротко и прямо</option><option value="creative">Творческая</option><option value="rough">Дерзкая, с матами</option></select></label></div>}
+            {settingsTab === "privacy" && <div className="settings-section"><h3>Конфиденциальность</h3><div className="settings-row"><div><strong>Сохранять историю чатов</strong><small>Если выключить, новые сообщения останутся только до перезагрузки страницы. Старые чаты не удаляются.</small></div><button role="switch" aria-checked={preferences.historyEnabled} className={"settings-toggle " + (preferences.historyEnabled ? "on" : "")} onClick={() => setPreferences(old => ({ ...old, historyEnabled: !old.historyEnabled }))}><span/></button></div><div className="settings-row"><div><strong>Удалить сохранённые чаты</strong><small>Все диалоги и сообщения из Firebase. Восстановить нельзя.</small></div><button className="settings-danger" onClick={() => setConfirmDeleteAll(true)}>Удалить</button></div><div className="privacy-note"><ShieldCheck size={17}/><p>Тексты, файлы и прикреплённые изображения передаются внешнему ИИ-провайдеру для обработки. Бесплатный провайдер может сохранять данные для улучшения своих моделей. Не прикрепляй конфиденциальные документы, личные фотографии других людей и пароли. Выключение истории отключает хранение в FedyaGPT, но не обработку у провайдера.</p></div></div>}
+            {settingsTab === "limits" && <div className="settings-section"><h3>Общие лимиты</h3><p className="settings-intro">Один запас на «Чат» и «Работу». Для Ultra и Max чат безлимитный. Работа тратит лимит в зависимости от профиля и глубины рассуждения.</p><div className="quota-card"><div className="quota-heading"><Zap size={16}/><strong>Общий лимит · {tier.name}</strong></div><div className="quota-line"><span>На 5 часов</span><b>{usage.remainingFiveHourPercent}% осталось</b></div><div className="limit-track"><span style={{ width: usage.remainingFiveHourPercent + "%" }}/></div><small>Всего {usage.fiveHourBudget} единиц</small><div className="quota-line"><span>На неделю</span><b>{usage.remainingPercent}% осталось</b></div><div className="limit-track"><span style={{ width: usage.remainingPercent + "%" }}/></div><small>Всего {usage.weeklyBudget} единиц</small></div><p className="settings-intro">Пятичасовой лимит обновится {usage.fiveHourResetsAt ? new Date(usage.fiveHourResetsAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "скоро"}. У ИИ-провайдера есть собственные ограничения нагрузки.</p><button className="settings-plan-button" onClick={() => { setSettingsOpen(false); setShopOpen(true); }}><Crown size={16}/> Сменить тариф <ChevronRight size={16}/></button></div>}
+            {settingsTab === "appearance" && <div className="settings-section"><h3>Интерфейс</h3><div className="settings-row"><div><strong>Компактный режим</strong><small>Меньше отступов и декоративных элементов.</small></div><button role="switch" aria-checked={compact} className={"settings-toggle " + (compact ? "on" : "")} onClick={() => setCompact(!compact)}><span/></button></div><div className="settings-row"><div><strong>Тема</strong><small>Можно переключать и кнопкой вверху.</small></div><select aria-label="Тема" value={theme} onChange={e => setTheme(e.target.value as "dark" | "light")}><option value="dark">Тёмная</option><option value="light">Светлая</option></select></div></div>}
           </div>
         </div>
         <div className="dialog-footer">{preferencesMessage && <span className="settings-feedback">{preferencesMessage}</span>}{(settingsTab === "personal" || settingsTab === "privacy") && <button className="primary-button" onClick={persistPreferences} disabled={preferencesSaving}>{preferencesSaving ? "Сохраняю…" : "Сохранить"}<Check size={16}/></button>}</div>

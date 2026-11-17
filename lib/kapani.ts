@@ -2,19 +2,22 @@ export const SUPABASE_URL = "https://npivvwwkdnbeqmjcwrke.supabase.co";
 // This publishable browser key is public and can be found in the Kapani project's config.js.
 export const SUPABASE_PUBLIC_KEY = "sb_publishable_1JhKuvlyy43Zehyr4Z-JZg_AIfMiAts";
 
-export type Plan = "free" | "plus" | "ultra" | "prime";
+export type Plan = "free" | "plus" | "pro" | "ultra" | "max" | "prime";
 export type ChatMode = "chat" | "work";
 export type Entitlements = { plan: Plan; balance: number | null; nickname: string | null; expiresAt: string | null };
 export const PLANS: Record<Plan, { name: string; price: number; imageLimit: number; fiveHourBudget: number; weeklyBudget: number; unlock: number }> = {
-  free: { name: "Бесплатный", price: 0, imageLimit: 1, fiveHourBudget: 30, weeklyBudget: 100, unlock: 0 },
-  plus: { name: "Kapani AI plus", price: 499, imageLimit: 5, fiveHourBudget: 50, weeklyBudget: 150, unlock: 2 },
-  ultra: { name: "Kapani AI ultra", price: 1299, imageLimit: 15, fiveHourBudget: 90, weeklyBudget: 240, unlock: 2 },
-  prime: { name: "Kapani AI prime", price: 2999, imageLimit: 40, fiveHourBudget: 360, weeklyBudget: 960, unlock: 2 },
+  free: { name: "Бесплатно", price: 0, imageLimit: 1, fiveHourBudget: 35, weeklyBudget: 175, unlock: 0 },
+  plus: { name: "Fedya AI plus", price: 19, imageLimit: 5, fiveHourBudget: 100, weeklyBudget: 560, unlock: 0 },
+  pro: { name: "Fedya AI pro", price: 49, imageLimit: 10, fiveHourBudget: 120, weeklyBudget: 1050, unlock: 2 },
+  ultra: { name: "Fedya AI ultra", price: 79, imageLimit: 15, fiveHourBudget: 420, weeklyBudget: 2940, unlock: 2 },
+  max: { name: "Fedya AI max", price: 99, imageLimit: 40, fiveHourBudget: 1080, weeklyBudget: 7560, unlock: 2 },
+  // Previously paid Prime subscriptions retain their access until expiration.
+  prime: { name: "Fedya AI max", price: 99, imageLimit: 40, fiveHourBudget: 1080, weeklyBudget: 7560, unlock: 2 },
 };
 export const MODEL_CHOICES = [
-  { id: "kapani-1", name: "KapaniGPT 1", detail: "Универсальная модель", tier: 0 },
-  { id: "kapani-grass", name: "KapaniGPT 1.1 grass", detail: "Более сложные задачи", tier: 1 },
-  { id: "kapani-sky", name: "KapaniGPT 1.2 sky", detail: "Максимальные возможности", tier: 2 },
+  { id: "serval-1", name: "serval 1", detail: "Самая быстрая · простые задачи", tier: 0 },
+  { id: "leopard-1", name: "leopard 1", detail: "Быстрая · умеренные задачи", tier: 1 },
+  { id: "lion-1", name: "lion 1", detail: "Код и логика · тщательная проверка", tier: 2 },
 ] as const;
 // Token packs use the bank's existing, fixed-price idempotent checkout plans.
 // The bank receipt uses bankPlan's label; a pack does not grant a subscription.

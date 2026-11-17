@@ -1,10 +1,8 @@
-name: Deploy KapaniGPT to Netlify
+name: Deploy FedyaGPT to Netlify
 
 on:
   push:
     branches: [main]
-    paths:
-      - ".github/workflows/netlify-production.yml"
   workflow_dispatch:
 
 permissions:
@@ -42,4 +40,4 @@ jobs:
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
           CI: "true"
         run: |
-          npx --yes netlify-cli@latest deploy --remote --prod --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --message "KapaniGPT main ${GITHUB_SHA}"
+          npx --yes netlify-cli@latest deploy --remote --prod --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --message "FedyaGPT main ${GITHUB_SHA}"

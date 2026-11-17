@@ -21,7 +21,7 @@ async function verifyFirebase(jwt: string): Promise<string> {
   if (header.alg !== "RS256" || claims.aud !== "kapanigpt" || claims.iss !== "https://securetoken.google.com/kapanigpt" ||
       !claims.sub || claims.exp <= now || claims.iat > now + 60) throw new Error("Сессия Firebase истекла.");
   if (!claims.firebase?.sign_in_provider || claims.firebase.sign_in_provider === "anonymous")
-    throw new Error("Для KapaniGPT нужна регистрация или вход в аккаунт.");
+    throw new Error("Для FedyaGPT нужна регистрация или вход в аккаунт.");
   const res = await fetch("https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com", { next: { revalidate: 3600 } });
   if (!res.ok) throw new Error("Не удалось подтвердить сессию Firebase.");
   const body = await res.json() as { keys?: Array<JsonWebKey & { kid?: string }> };
@@ -37,7 +37,7 @@ async function verifyFirebase(jwt: string): Promise<string> {
 
 export async function getFirebaseUserId(request: Request): Promise<string> {
   const token = request.headers.get("x-firebase-token");
-  if (!token) throw new Error("Войди в аккаунт KapaniGPT, чтобы продолжить.");
+  if (!token) throw new Error("Войди в аккаунт FedyaGPT, чтобы продолжить.");
   return verifyFirebase(token);
 }
 
@@ -79,7 +79,7 @@ export async function getUsage(account: Account) {
   return { plan: account.plan, nickname: account.nickname, balance: account.balance, expiresAt: account.expiresAt,
     promoEligible: !account.promoClaimed, promoClaimed: account.promoClaimed,
     promoStartsAt: account.promoStartsAt, promoExpiresAt: account.promoExpiresAt,
-    providerConfigured: true, // Kilo's anonymous free gateway needs no user key.
+    providerConfigured: true,
     remainingPercent: Math.max(0, Math.round((1 - week.spent / plan.weeklyBudget) * 100)),
     remainingFiveHourPercent: Math.max(0, Math.round((1 - five.spent / plan.fiveHourBudget) * 100)),
     fiveHourBudget: plan.fiveHourBudget, weeklyBudget: plan.weeklyBudget,
@@ -90,23 +90,20 @@ export async function getUsage(account: Account) {
 
 export function estimateCost(model: string, reasoning: Reasoning, plan: Plan, mode: ChatMode = "chat"): number {
   const tier = MODEL_CHOICES.find(m => m.id === model)?.tier || 0;
-  // Chat is deliberately inexpensive; Work's model/reasoning passes cost more.
-  if (mode === "chat") return reasoning === "high" ? 3 : reasoning === "medium" ? 2 : 1;
-  const base = tier === 2 ? 6 : tier === 1 ? 3 : 2;
-  if (reasoning === "off") return base;
+  if (mode === "chat") return ({ off: 1, light: 2, medium: 3, high: plan === "free" ? 4 : 5, "very-high": 5, maximum: 5 })[reasoning];
+  const base = tier === 2 ? 12 : tier === 1 ? 7 : 3;
   const factor: Record<Reasoning, number> = { off: 1, light: 1.3, medium: 1.8, high: 2.5, "very-high": 3.5, maximum: 5 };
   return Math.ceil(base * factor[reasoning]);
 }
 
 export function enforceModel(plan: Plan, model: string, reasoning: Reasoning, mode: ChatMode = "chat") {
   const requiredTier = MODEL_CHOICES.find(m => m.id === model)?.tier;
-  if (requiredTier === undefined) throw new Error("Неизвестная модель KapaniGPT.");
+  if (requiredTier === undefined) throw new Error("Неизвестная модель FedyaGPT.");
   if (mode === "work") {
-    if (plan === "free") throw new Error("Режим «Работа» доступен с подписки Kapani AI plus.");
+    if (plan === "free" || plan === "plus") throw new Error("Режим «Работа» доступен с Fedya AI pro.");
     if (!["off", "light", "medium", "high", "very-high", "maximum"].includes(reasoning)) throw new Error("Неизвестный режим рассуждения.");
   } else {
-    if (model !== "kapani-1") throw new Error("Выбор модели доступен только в режиме «Работа».");
-    if (plan === "free" && !["off", "medium"].includes(reasoning)) throw new Error("На бесплатном тарифе рассуждение можно только включить или выключить.");
+    if (model !== "serval-1") throw new Error("Выбор модели доступен только в режиме «Работа».");
     if (plan !== "free" && !["off", "light", "medium", "high"].includes(reasoning)) throw new Error("Для обычного чата доступны три уровня рассуждений.");
   }
 }

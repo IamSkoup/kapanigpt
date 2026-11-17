@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "KapaniGPT — твой ИИ-ассистент",
-  description: "Тёмный AI-чат KapaniGPT. Умные ответы, история диалогов, изображения и файлы.",
+  title: "FedyaGPT — чат и работа",
+  description: "FedyaGPT: чат, работа, история диалогов и файлы.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
