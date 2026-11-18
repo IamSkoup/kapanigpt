@@ -29,7 +29,7 @@ function profileInstruction(profile: string, reasoning: Reasoning, canSendFiles:
   const reasoningText = reasoning === "off" ? "Сразу дай ответ."
     : `Глубина рассуждения: ${depth[reasoning]}. Перед основным ответом добавь блок <fedya_reason> с кратким понятным пользователю объяснением подхода, проверок и неопределённостей. Это краткое объяснение результата, не дословная запись скрытого внутреннего рассуждения. </fedya_reason>`;
   const files = canSendFiles ? 'Если пользователь просит файл для скачивания, можешь отправить до четырёх текстовых файлов блоками <kapani_file name="имя.ext">содержимое</kapani_file>. Доступны txt, md, html, css, js, ts, tsx, jsx, json, csv, py, svg, xml, sql, yaml. Для изображений доступен только SVG; не обещай бинарные форматы.' : "На этом тарифе отправка файлов в чате недоступна; ответь текстом.";
-  return `Ты — FedyaGPT. ${profileText} ${reasoningText} Общайся прямо, с характером, без сюсюканья и искусственных вступлений. По умолчанию допустимы уместные маты и резкие формулировки, но не теряй содержание и подстраивайся под просьбу пользователя; в чувствительных ситуациях отвечай бережно. Следуй фактам из базы о Капанях, но устаревшие названия продукта и правила тарифов в ней не действуют. ${files} Если спрашивают о технической основе, честно сообщи, что ответы генерирует внешний провайдер; техническая основа текущего запроса — ${underlyingModel}. Для чата с автовыбором точная базовая модель может меняться. Не утверждай, будто профили являются отдельно обученными собственными моделями. Не выдумывай факты. Отвечай на языке пользователя.`;
+  return `Ты — FedyaGPT. ${profileText} ${reasoningText} Общайся прямо, с характером, без сюсюканья и искусственных вступлений. По умолчанию допустимы уместные маты и резкие формулировки, но не теряй содержание и подстраивайся под просьбу пользователя; в чувствительных ситуациях отвечай бережно. Следуй фактам из базы о Капанях, но устаревшие названия продукта и правила тарифов в ней не действуют. ${files} Если спрашивают о технической основе, честно сообщи, что ответы генерирует внешний провайдер; техническая основа текущего запроса — ${underlyingModel}. Для чата с автовыбором точная базовая модель может меняться. Не утверждай, будто профили являются отдельно обученными собственными моделями. Не выдумывай факты. Не одобряй ненависть и призывы к дискриминации по религии, национальности или происхождению; отвечай по существу без их поддержки. Отвечай на языке пользователя.`;
 }
 
 function reasoningEffort(reasoning: Reasoning) {
@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
       readPreferences(account.userId),
       kapaniSystemKnowledge(question, /капан|персонаж|характер|жител|рыжик|вова|дурдом|сюжет|канон/i.test(question)
         ? 30000 : profile === "lion-1" ? 26000 : profile === "leopard-1" ? 23000 : 19000, account.userId),
-      isWebQuestion ? searchWeb(question, signal).catch(() => []) : Promise.resolve([]),
+      isWebQuestion ? searchWeb(question, AbortSignal.any([signal, AbortSignal.timeout(5000)])).catch(() => []) : Promise.resolve([]),
     ]);
     const style = prefs.tone === "rough"
       ? "Манера общения: дерзкая, саркастичная, живая и разговорная. Допускаются естественные русские маты, включая крепкие, если это к месту: в шутках, перепалке, при раздражении абсурдом или прямой просьбе отвечать жёстко. Можешь остро поставить на место, не заискивай, не играй в вежливого робота и не заменяй ответ морализаторством. Если пользователь прямо затеял грубую шутливую перепалку или провоцирует такой тон, допустимо даже короткое «иди нахуй», но никогда не отвечай так вместо содержательной помощи на обычный вопрос. Но всегда помогай по существу, не матерись механически в каждой строке, не переходи к угрозам, травле и унижению уязвимых людей. На медицинские, тяжёлые, кризисные и другие чувствительные вопросы отвечай серьёзно и бережно. Если пользователь сам просит более спокойный тон, подстройся."
@@ -117,33 +117,55 @@ export async function POST(request: NextRequest) {
       messages: providerMessages,
       max_tokens: reasoning === "maximum" ? 2400 : profile === "lion-1" ? 1950
         : profile === "leopard-1" ? 1650 : 1250,
-      ...(hasImages ? {} : { reasoning_effort: reasoningEffort(reasoning) }),
+      ...(hasImages || reasoning === "off" ? {} : { reasoning_effort: reasoningEffort(reasoning) }),
       stream: false,
     });
     let answer = "", actualModel = selectedModel;
     const startedAt = Date.now();
+    // Retry transient transport failures, not authorization, moderation or other
+    // provider rejections. Keep the same model and the same safety instructions.
+    const gatewayDeadline = AbortSignal.timeout(38000);
     for (let attempt = 0; attempt < 2; attempt++) {
-      const response = await fetch(CHAT_ENDPOINT, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Accept": "application/json" },
-        body: requestBody, cache: "no-store",
-        signal: AbortSignal.any([signal, AbortSignal.timeout(attempt === 0 ? (profile === "lion-1" ? 27000 : profile === "leopard-1" ? 23000 : 18000) : 13000)]),
-      });
-      // A single quick retry handles transient gateway errors without
-      // multiplying expensive requests for ordinary prompts.
-      if ([502, 503, 504].includes(response.status) && attempt === 0) {
-        await response.body?.cancel().catch(() => {});
-        continue;
+      const attemptSignal = AbortSignal.any([
+        signal, gatewayDeadline,
+        AbortSignal.timeout(attempt === 0 ? (reasoning === "off" ? 16000 : 22000) : 15000),
+      ]);
+      try {
+        const response = await fetch(CHAT_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: requestBody, cache: "no-store", signal: attemptSignal,
+        });
+        if ([502, 503, 504].includes(response.status) && attempt === 0 && !signal.aborted && !gatewayDeadline.aborted) {
+          await response.body?.cancel().catch(() => {});
+          console.warn("[chat] transient gateway status", response.status);
+          continue;
+        }
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => {});
+          throw new Error(response.status === 429
+            ? "Бесплатные модели перегружены. Попробуй чуть позже. Лимит не списан."
+            : `Шлюз нейросети вернул ошибку ${response.status}. Лимит не списан.`);
+        }
+        const data = await response.json() as {
+          model?: string;
+          choices?: Array<{ finish_reason?: string; message?: { content?: string | null } }>;
+        };
+        if (data.choices?.[0]?.finish_reason === "content_filter") {
+          throw new Error("Модель не может ответить на этот запрос. Лимит не списан.");
+        }
+        answer = data.choices?.[0]?.message?.content?.trim() || "";
+        actualModel = data.model || selectedModel;
+        break;
+      } catch (error) {
+        if (signal.aborted) throw error;
+        // fetch() can reject instead of returning an HTTP response. The old
+        // retry never saw these exceptions, so a single slow gateway killed chat.
+        const transient = error instanceof Error &&
+          (error.name === "TimeoutError" || error.name === "AbortError" || error instanceof TypeError);
+        if (!transient || attempt !== 0 || gatewayDeadline.aborted) throw error;
+        console.warn("[chat] transient gateway transport failure", error.name);
       }
-      if (!response.ok) {
-        throw new Error(response.status === 429
-          ? "Бесплатные модели перегружены. Попробуй чуть позже. Лимит не списан."
-          : `Шлюз нейросети вернул ошибку ${response.status}. Лимит не списан.`);
-      }
-      const data = await response.json() as { model?: string; choices?: Array<{ message?: { content?: string | null } }> };
-      answer = data.choices?.[0]?.message?.content?.trim() || "";
-      actualModel = data.model || selectedModel;
-      break;
     }
     if (!answer) throw new Error("Модель не вернула ответ. Лимит не списан.");
     const reasonMatch = reasoning !== "off" ? answer.match(/<fedya_reason>([\s\S]{1,2400}?)<\/fedya_reason>/i) : null;
@@ -173,6 +195,11 @@ export async function POST(request: NextRequest) {
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(encoder.encode(" ".repeat(2048)));
+      const heartbeat = setInterval(() => {
+        if (!signal.aborted) {
+          try { controller.enqueue(encoder.encode(" ".repeat(128))); } catch { /* client disconnected */ }
+        }
+      }, 5000);
       void (async () => {
         try {
           const result = await generate();
@@ -180,11 +207,12 @@ export async function POST(request: NextRequest) {
         } catch (error) {
           if (!signal.aborted) {
             const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+            console.warn("[chat] generation failed", error instanceof Error ? error.name : "unknown");
             const message = timedOut ? "Шлюз нейросети не успел ответить. Лимит не списан."
               : error instanceof Error ? error.message : "Не удалось получить ответ. Лимит не списан.";
             controller.enqueue(encoder.encode(JSON.stringify({ error: message })));
           }
-        } finally { try { controller.close(); } catch { /* client disconnected */ } }
+        } finally { clearInterval(heartbeat); try { controller.close(); } catch { /* client disconnected */ } }
       })();
     },
     cancel() { aborted.abort(); },
