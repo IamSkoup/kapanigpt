@@ -12,7 +12,8 @@
     "start": "next start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
-    "test": "node --test tests/*.cjs"
+    "test": "node --test tests/*.cjs",
+    "prebuild": "npm install --include=dev --ignore-scripts --no-audit --no-fund"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
